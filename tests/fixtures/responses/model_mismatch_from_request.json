@@ -1,0 +1,7 @@
+{
+  "model": "jev-2026-09",
+  "usage": {"input_tokens": 7, "output_tokens": 1},
+  "answers": {
+    "bare_except": {"type": "noul", "noul": 0.5}
+  }
+}

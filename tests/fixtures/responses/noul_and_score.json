@@ -1,0 +1,14 @@
+{
+  "model": "jev-latest",
+  "usage": {"input_tokens": 120, "output_tokens": 8},
+  "answers": {
+    "swallows_exception": {"type": "noul", "noul": 0.82},
+    "mixed_responsibility": {
+      "type": "score",
+      "score": 1.4,
+      "confidence": 0.71,
+      "legend": {"0": "one concern", "1": "two concerns", "2": "three or more concerns"},
+      "probabilities": {"0": 0.1, "1": 0.6, "2": 0.3}
+    }
+  }
+}
