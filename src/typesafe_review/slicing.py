@@ -152,6 +152,17 @@ def _language(path: str) -> str:
     return ext[1:] if ext else ''
 
 
+def symbol_from_header(header: str) -> str:
+    """The function or class name a raw `@@ ... @@` hunk header line names, or
+    `<module>`. Public so callers with only the header text (e.g. `compose.py`,
+    working from `HunkState`, which does not carry `Hunk.symbol`) can derive the
+    same symbol `slicing.py` itself computes when it builds a `Hunk`.
+    """
+    match = _HUNK_HEADER_RE.match(header)
+    funcname = match.group(5) if match else header
+    return _symbol(funcname)
+
+
 def _symbol(funcname: str) -> str:
     funcname = funcname.strip()
     if not funcname:
