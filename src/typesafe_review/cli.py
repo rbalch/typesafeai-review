@@ -9,20 +9,27 @@ below so the CLI never claims work it has not done.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
 
-from typesafe_review.verdict import EXIT_TOOL_FAILURE
+from typesafe_review.slicing import SlicingError, slice_diff
+from typesafe_review.state import (
+    StateError,
+    build_change_state,
+    build_hunk_states,
+    load_acceptance_tests,
+    load_conventions,
+)
+from typesafe_review.taskfile import TaskFileError, load_task
+from typesafe_review.verdict import EXIT_APPROVE, EXIT_TOOL_FAILURE
 
 BASE_CANDIDATES = ('develop', 'main', 'master')
 
 # Flags this task does not implement yet, and the task that will. Checked in this
 # order, all before step 0 (stale-output cleanup) touches the worktree.
 _NOT_IMPLEMENTED = (
-    ('task', 'T-02'),
-    ('red_sha', 'T-04'),
-    ('dump_state', 'T-05'),
     ('record', 'T-07'),
     ('replay', 'T-07'),
 )
@@ -87,6 +94,54 @@ def _clean_stale_outputs(worktree: Path) -> None:
             candidate.unlink()
 
 
+def _dump_state(worktree: Path, base: str, task_path: Path | None, red_sha: str | None, dump_dir: Path) -> int:
+    """`--dump-state`: slice, build every state shape, write it to `dump_dir` as JSON,
+    print a token estimate per file to stderr, and exit — no API call, nothing written
+    in `worktree`.
+    """
+    task = None
+    if task_path is not None:
+        try:
+            task = load_task(task_path)
+        except TaskFileError as e:
+            print(str(e), file=sys.stderr)
+            return EXIT_TOOL_FAILURE
+
+    try:
+        change = slice_diff(worktree, base)
+    except SlicingError as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    try:
+        conventions = load_conventions(worktree)
+        acceptance_tests = load_acceptance_tests(worktree, red_sha)
+        hunk_states = build_hunk_states(task, change, conventions)
+        change_state = build_change_state(task, change, acceptance_tests)
+    except StateError as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    try:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, hunk_state in enumerate(hunk_states, start=1):
+            encoded = json.dumps(hunk_state, indent=2)
+            path = dump_dir / f'hunk-{i:02d}.json'
+            path.write_text(encoded)
+            print(f'{path.name}: ~{len(encoded) // 4} tokens', file=sys.stderr)
+
+        change_encoded = json.dumps(change_state, indent=2)
+        change_path = dump_dir / 'change.json'
+        change_path.write_text(change_encoded)
+        print(f'{change_path.name}: ~{len(change_encoded) // 4} tokens', file=sys.stderr)
+    except OSError as e:
+        print(f'{dump_dir}: cannot write state dump ({e.strerror or e})', file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    return EXIT_APPROVE
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -116,6 +171,13 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_TOOL_FAILURE
 
     print(f'base: {base}', file=sys.stderr)
+
+    if args.dump_state is not None:
+        # Dump mode is read-only inspection of `worktree`; step 0 (stale-output
+        # cleanup) must never run for it, or `--dump-state` would delete a
+        # pre-existing `review.md` / `review.json` in a target that was never
+        # actually reviewed.
+        return _dump_state(worktree, base, args.task, args.red_sha, args.dump_state)
 
     _clean_stale_outputs(worktree)
 
