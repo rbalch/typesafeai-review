@@ -38,7 +38,7 @@ from typesafe_review.ask import AskResult, Live, Record, Recorder, Replay, Reque
 from typesafe_review.checks import run_checks
 from typesafe_review.compose import Context, compose
 from typesafe_review.questions import Question as CatalogQuestion
-from typesafe_review.questions import criterion_questions, questions_for
+from typesafe_review.questions import expected_change_questions, expected_hunk_questions
 from typesafe_review.render import OUTPUT_JSON, OUTPUT_MD, render_json, render_markdown, write_outputs
 from typesafe_review.slicing import MAX_HUNK_LINES, Change, slice_diff
 from typesafe_review.state import (
@@ -109,25 +109,14 @@ def _build_requests(task: Task | None, hunk_states: list[HunkState], change_stat
         (
             _hunk_request_key(i),
             cast(JSONContent, dict(hunk_state)),
-            _send_questions(_expected_hunk_questions(hunk_state)),
+            _send_questions(expected_hunk_questions(hunk_state['file']['language'], hunk_state['file']['is_test'])),
         )
         for i, hunk_state in enumerate(hunk_states)
     ]
     requests.append(
-        (_CHANGE_KEY, cast(JSONContent, dict(change_state)), _send_questions(_expected_change_questions(task)))
+        (_CHANGE_KEY, cast(JSONContent, dict(change_state)), _send_questions(expected_change_questions(task)))
     )
     return requests
-
-
-def _expected_hunk_questions(hunk_state: HunkState) -> dict[str, CatalogQuestion]:
-    return questions_for('hunk', language=hunk_state['file']['language'], is_test=hunk_state['file']['is_test'])
-
-
-def _expected_change_questions(task: Task | None) -> dict[str, CatalogQuestion]:
-    expected = dict(questions_for('change'))
-    if task is not None:
-        expected.update(criterion_questions(task))
-    return expected
 
 
 def _collect_notes(change: Change, conventions: str) -> list[str]:

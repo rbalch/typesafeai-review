@@ -1,0 +1,8 @@
+{
+  "pkg.py@@@ -2,0 +3,4 @@ def existing() -> int:": {
+    "missing_type_hints_public": true
+  },
+  "<change>": {
+    "new_behaviour_untested": true
+  }
+}

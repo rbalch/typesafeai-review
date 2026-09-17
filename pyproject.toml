@@ -30,6 +30,10 @@ packages = ["src/typesafe_review"]
 [tool.ruff]
 line-length = 120
 src = ["src", "tests", "controls", "governance"]
+# `fixtures/<case>/{before,after}/*.py` are calibration diff content (spec §9), not
+# project source: deliberately smelly on purpose, for Jev to judge, not for ruff to
+# lint.
+extend-exclude = ["fixtures"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -46,6 +50,10 @@ quote-style = "single"
 # The governance scripts are executables, not an installed package, so ty needs the
 # same search path pytest gets from `pythonpath` below.
 extra-paths = ["governance/scripts"]
+
+[tool.ty.src]
+# See `[tool.ruff]`'s `extend-exclude`: calibration diff content, not project source.
+exclude = ["fixtures"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

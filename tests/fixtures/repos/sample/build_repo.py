@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from typesafe_review.testrepo import rev_parse, run_git
 
 _PYPROJECT = """\
 [project]
@@ -90,19 +91,10 @@ class SampleRepo:
     base: str = 'main'
 
 
-def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> None:
-    subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True, env=env)
-
-
-def _rev_parse(repo: Path, ref: str) -> str:
-    out = subprocess.run(['git', 'rev-parse', ref], cwd=repo, check=True, capture_output=True)
-    return out.stdout.decode().strip()
-
-
 def _commit(repo: Path, message: str) -> str:
-    _git(repo, 'add', '-A')
-    _git(repo, 'commit', '-q', '-m', message)
-    return _rev_parse(repo, 'HEAD')
+    run_git(repo, 'add', '-A')
+    run_git(repo, 'commit', '-q', '-m', message)
+    return rev_parse(repo, 'HEAD')
 
 
 def build(root: Path) -> SampleRepo:
@@ -110,15 +102,15 @@ def build(root: Path) -> SampleRepo:
     repo = root / 'repo'
     repo.mkdir(parents=True)
 
-    _git(repo, 'init', '-q', '-b', 'main')
-    _git(repo, 'config', 'user.email', 'test@example.com')
-    _git(repo, 'config', 'user.name', 'Test')
+    run_git(repo, 'init', '-q', '-b', 'main')
+    run_git(repo, 'config', 'user.email', 'test@example.com')
+    run_git(repo, 'config', 'user.name', 'Test')
 
     (repo / 'pyproject.toml').write_text(_PYPROJECT)
     (repo / 'pkg.py').write_text(_PKG_BASE)
     _commit(repo, 'base: pkg.py with thing() unimplemented')
 
-    _git(repo, 'checkout', '-q', '-b', 'work')
+    run_git(repo, 'checkout', '-q', '-b', 'work')
 
     (repo / 'tests').mkdir()
     (repo / 'tests' / 'test_thing.py').write_text(_TEST_THING)

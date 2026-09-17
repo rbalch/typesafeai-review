@@ -21,6 +21,7 @@ import pytest
 from typesafe_sdk import Choice, NoulAnswer, Score, ScoreAnswer, SystemOneResponse, Usage
 
 import typesafe_review.compose as compose_module
+import typesafe_review.questions as questions_module
 from typesafe_review.checks import CheckFinding, CheckReport, CheckResult
 from typesafe_review.compose import (
     UNANSWERED,
@@ -632,7 +633,7 @@ def test_unsupported_choice_primitive_raises(monkeypatch: pytest.MonkeyPatch) ->
         why='why',
         rubric='0',
     )
-    real_questions_for = compose_module.questions_for
+    real_questions_for = questions_module.questions_for
 
     def fake_questions_for(scope: Scope, language: str | None = None, is_test: bool = False) -> dict[str, Question]:
         result = dict(real_questions_for(scope, language=language, is_test=is_test))
@@ -640,7 +641,11 @@ def test_unsupported_choice_primitive_raises(monkeypatch: pytest.MonkeyPatch) ->
             result['bogus_choice'] = bogus
         return result
 
-    monkeypatch.setattr(compose_module, 'questions_for', fake_questions_for)
+    # `compose.py` no longer imports `questions_for` itself (fix round 1, item 3):
+    # `expected_change_questions` in `questions.py` calls it internally, so that is
+    # where the fake has to live for `compose.run()`'s change-scope expected set to
+    # pick it up.
+    monkeypatch.setattr(questions_module, 'questions_for', fake_questions_for)
 
     with pytest.raises(ComposeInvariantError, match='bogus_choice'):
         run()

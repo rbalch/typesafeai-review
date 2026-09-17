@@ -1,0 +1,9 @@
+{
+  "pkg.py@@@ -2 +2,4 @@ def compute(x: int) -> int:": {
+    "swallows_exception": true,
+    "bare_except": true
+  },
+  "<change>": {
+    "new_behaviour_untested": true
+  }
+}

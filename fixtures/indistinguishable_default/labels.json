@@ -1,0 +1,8 @@
+{
+  "pkg.py@@@ -4,2 +4,2 @@": {
+    "indistinguishable_default": true
+  },
+  "<change>": {
+    "new_behaviour_untested": true
+  }
+}
