@@ -72,7 +72,7 @@ ledger.
   (`assets/.claude/agents/reviewer.md` there) with a deterministic, calibrated tool.
   Read that file, `boundary-reviewer.md`, and `assets/.claude/skills/orchestrate/SKILL.md`
   there when you need the contract this tool must honour.
-- Ships as a standalone dev dependency (`uv run review`), never vendored into the
+- Ships as a standalone dev dependency (`uv run ts-review`), never vendored into the
   target codebase. Scaffolded projects will add it to their `dev` group once it works.
 - Contract with the orchestrator: same `review.md` / `review.json` shape as the LLM
   reviewer, plus `question_id` and `probability` per finding. Exit codes: 0 APPROVE,
@@ -134,7 +134,7 @@ governance/ controls/  the ledger harness; agents read governance/views/RULES.md
 make check       # the single gate: controls → views --check → governance → tests
 make tasks PLAN=tasks/typesafe-reviewer   # task status from PR state
 make views       # regenerate governance/views/RULES.md + registry.json
-uv run review --worktree <path>           # once T-01 lands
+uv run ts-review --worktree <path>        # once T-01 lands
 ```
 
 ## Working context (keep this current)
