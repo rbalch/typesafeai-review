@@ -74,8 +74,9 @@ ledger.
   there when you need the contract this tool must honour.
 - Ships as a standalone dev dependency (`uv run ts-review`), never vendored into the
   target codebase. Scaffolded projects will add it to their `dev` group once it works.
-- Contract with the orchestrator: same `review.md` / `review.json` shape as the LLM
-  reviewer, plus `question_id` and `probability` per finding. Exit codes: 0 APPROVE,
+- Contract with the orchestrator: writes `ts-review.md` / `ts-review.json`, same shape
+  as the LLM reviewer's `review.md` / `review.json` (distinct names so both can run on
+  one worktree), plus `question_id` and `probability` per finding. Exit codes: 0 APPROVE,
   2 CHANGES_REQUESTED, 3 NEEDS_HUMAN, 1 tool failure.
 - The `new-project` flow is untouched until this works on real diffs. Test targets are
   the user's other repos, passed via `--worktree`.
@@ -114,7 +115,8 @@ ledger.
 - Generate review prose with an LLM (v1). Fix text is a template per question.
 - Read `governance/decisions/` in a target repo for rules; that is `boundary-reviewer`'s
   job and it reads the generated view.
-- Edit the worktree under review. Only `review.md` and `review.json` are written there.
+- Edit the worktree under review. Only `ts-review.md` and `ts-review.json` are written
+  there.
 - Commit `.env`, fixtures containing secrets, or the API key in any form.
 
 ## Layout (planned, see spec §8)
@@ -145,4 +147,5 @@ uv run ts-review --worktree <path>        # once T-01 lands
   replaces, so it stays as the reference and the control group.
 - Distribution name is `typesafe-review`, package `typesafe_review`, directory
   `typesafeai-review`. The spec and task files use the first two.
-- **Current work:** T-01 (package scaffold and CLI). Five tasks are `ready`.
+- **Current work:** T-09 → T-10 → T-11, stacked PRs (each branches off the previous,
+  by Ryan's call on 2026-09-17). T-01..T-08 merged.

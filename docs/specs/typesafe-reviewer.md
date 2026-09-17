@@ -24,7 +24,9 @@ is a subprocess exit code, and the weights live in a Python file under version c
 ## 3. Contract (unchanged from `reviewer.md`)
 
 - Runs in the builder's worktree, reviews `develop..HEAD`.
-- Writes `review.md` and `review.json` at the worktree root, from scratch, same schema.
+- Writes `ts-review.md` and `ts-review.json` at the worktree root, from scratch, same
+  schema as the LLM reviewer's `review.md` / `review.json`. Distinct names so both
+  reviewers can run on one worktree and their outputs sit side by side (§9).
 - Verdicts `APPROVE` / `CHANGES_REQUESTED` / `NEEDS_HUMAN`; score 1–5; severities
   `blocker` / `important` / `minor` / `nit`; `stop_reason` as today.
 - Never edits source.
@@ -49,8 +51,8 @@ Exit 0 on `APPROVE`, 2 on `CHANGES_REQUESTED`, 3 on `NEEDS_HUMAN`, 1 on tool fai
   are still written. The ad-hoc run is the experiment; the orchestrator always passes
   both flags.
 - **`--base`** defaults to `develop`; if that ref does not exist, fall back to `main`,
-  then `master`; if none exist, exit 1. The chosen base is recorded in `review.json`.
-- **Outputs.** Step 0 deletes `review.md` and `review.json` from the worktree root if
+  then `master`; if none exist, exit 1. The chosen base is recorded in `ts-review.json`.
+- **Outputs.** Step 0 deletes `ts-review.md` and `ts-review.json` from the worktree root if
   they exist. Both are written last, atomically (temp file + rename), only after every
   step succeeded. A crash or API failure leaves neither file.
 - **`--dump-state <dir>`** writes every state + question set as JSON and exits without
@@ -66,7 +68,7 @@ Exit 0 on `APPROVE`, 2 on `CHANGES_REQUESTED`, 3 on `NEEDS_HUMAN`, 1 on tool fai
 ## 4. Pipeline
 
 ```
- 0. clean       delete review.md / review.json if present    (code)
+ 0. clean       delete ts-review.md / .json if present       (code)
  1. checks      run red proof · green at HEAD · make check   (subprocess, no model)
  2. slice       git diff develop..HEAD → hunks + context     (code)
  3. gather      per hunk: task file, before/after excerpt,   (code)
@@ -77,7 +79,7 @@ Exit 0 on `APPROVE`, 2 on `CHANGES_REQUESTED`, 3 on `NEEDS_HUMAN`, 1 on tool fai
                 (task satisfaction, test adequacy)
  6. compose     thresholds + confidence gates → findings     (code)
                 counts → verdict → score
- 7. write       review.md, review.json                       (code)
+ 7. write       ts-review.md, ts-review.json                 (code)
 ```
 
 Steps 4 and 5 use `AsyncTypeSafeClient` with a bounded semaphore. Every hunk gets every
@@ -114,7 +116,7 @@ language and kind (new file, test file, deleted lines only, etc.).
 - Pass a temp attributes file (`*.py diff=python`) so hunk headers carry the enclosing
   `def`/`class`, which is `symbol_or_area`. Without it git only sees top-level names.
 - Hunks over 400 lines are truncated to the first 400 and marked `truncated: true`
-  in the state and in `review.json` notes. Never silently.
+  in the state and in `ts-review.json` notes. Never silently.
 - Language from extension. Non-Python hunks get §5.1 and §5.2 questions only.
 - Test files: path under `tests/` or name matches `test_*.py` / `*_test.py`.
 
@@ -245,7 +247,7 @@ All in `review/compose.py`; nothing here touches the model.
 
 1. **Threshold, then gate.** A Noul fires when `noul ≥ threshold`. A Score fires when
    `score` crosses its level **and** `confidence ≥ 0.6`; below that it is not a finding
-   but is listed under "Uncertain" in `review.md` for the orchestrator's eye.
+   but is listed under "Uncertain" in `ts-review.md` for the orchestrator's eye.
 2. **Severity is a table lookup** on question id, with modifiers (`touches_high_risk`
    promotes test findings to blocker). No model chooses severity.
 3. **Dedupe** the same id across adjacent hunks of one symbol into one finding.
@@ -258,12 +260,12 @@ All in `review/compose.py`; nothing here touches the model.
    4 if only minor/nit; 5 if none. Same hard constraints as `reviewer.md`.
 6. **Missing context** (no task file, no red sha, diff empty) → `stop_reason:
    missing_context`, verdict `NEEDS_HUMAN`. Never guess.
-7. **API failure** after retries → exit 1, no `review.json`. The orchestrator must not
+7. **API failure** after retries → exit 1, no `ts-review.json`. The orchestrator must not
    read a stale file: the CLI deletes both outputs before it starts.
 
 ## 7. Output
 
-`review.json` gains two fields per finding, otherwise unchanged:
+`ts-review.json` has the `review.json` schema plus two fields per finding:
 
 ```json
 { "question_id": "swallows_exception", "probability": 0.91, "confidence": null }
@@ -274,7 +276,7 @@ and a top-level `"engine": {"model": "jev-latest", "requests": 14, "input_tokens
 `concrete_fix` comes from the question's `fix` template with `{symbol}` and `{path}`
 filled. `symbol_or_area` is the hunk header's function name or `<module>`.
 
-`review.md` adds an **Uncertain** section: fired-but-low-confidence scores and any
+`ts-review.md` is `review.md` plus an **Uncertain** section: fired-but-low-confidence scores and any
 `criterion_*` in the grey zone, each with its probability. The orchestrator reads it;
 the builder does not.
 
@@ -298,7 +300,7 @@ src/typesafe_review/
   questions.py      the catalog: dataclass Question(id, primitive, severity, threshold, fix, scope)
   ask.py            async fan-out with semaphore + RetryPolicy; record/replay
   compose.py        §6
-  render.py         review.md / review.json, atomic write
+  render.py         ts-review.md / ts-review.json, atomic write
 tests/              replayed responses as fixtures, no live calls
 fixtures/           labelled diffs for §9
 ```
@@ -310,8 +312,8 @@ Build order, each step runnable on its own:
 2. `questions` + `ask` + `compose` + `render`, with `--record` / `--replay`. Tests on
    replayed responses.
 3. First real runs via `--worktree` on the user's other repos. Log `engine.input_tokens`
-   and wall time per review. Compare `review.json` with the LLM reviewer's on the same
-   diff.
+   and wall time per review. Compare `ts-review.json` with the LLM reviewer's `review.json` on the
+   same diff.
 4. Calibration fixtures and `--calibrate` (§9).
 
 TUI (`ink`, `rich`, `textual`) is out of scope for v1. The tool is a Python package
