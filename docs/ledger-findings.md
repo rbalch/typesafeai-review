@@ -31,8 +31,8 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-01)
 - **Bin:** 2
 - **Claim:** A path check uses `git rev-parse --git-dir` (true anywhere inside a repo) while the code that follows assumes the repo root; a subdirectory passed as `--worktree` had `sub/review.md` deleted. Checkable: any `rev-parse --git-dir` guard not paired with a `--show-toplevel` equality.
-- **Sightings:** 2 (T-01 `--git-dir` guard; T-03 `_show_file_at_head` classified "path missing at HEAD" by matching git's stderr text, which also matched a corrupted path, so an existing file got an empty context window)
-- **Action:** soft — T-01 compares `--show-toplevel`; T-03 now probes `git cat-file -e` gated on the numstat deletion record. **One more sighting graduates this.**
+- **Sightings:** 3 (T-01 `--git-dir` guard; T-03 `_show_file_at_head` classified "path missing at HEAD" by matching git's stderr text, which also matched a corrupted path, so an existing file got an empty context window; T-04 red proof counted *any* non-zero pytest exit as "tests failed", so a red commit with zero tests (exit 5) passed the red proof, and a git failure inside the edited-tests check was swallowed into "nothing edited")
+- **Action:** **third sighting reached on 2026-09-17. Ready for `control-author`.** Candidate claim for the control: a guard whose success branch is reached by a condition broader than the one the following code relies on (`rev-parse --git-dir` for "is root", `returncode != 0` for "tests failed", `except X: return default`). Whether a fitness control can check this mechanically is the control-author's call; it may refuse. Not dispatched yet: the orchestrator was told to stop after T-04.
 - **Notes:** Found by the orchestrator, not either reviewer. Both reviewers scored 5/5 with zero findings; the fail-closed reading of "root only" was in the task text and still slipped past both.
 
 ### F-2 — Task ids hardcoded as strings in code
@@ -62,8 +62,8 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-03)
 - **Bin:** 2
 - **Claim:** `+++ b/<path>` from `git diff` carries a trailing tab when the path has a space; the parser used it verbatim, so `Hunk.path` was `"my file.py\t"`. Checkable: any parse of `---`/`+++`/`diff --git` lines that does not strip the tab or set `core.quotePath=false`.
-- **Sightings:** 1
-- **Action:** soft — fixed in T-03; watch any later module that reads git output (`checks.py`, `state.py`)
+- **Sightings:** 2 (T-03 `+++` path; T-04 `git diff --name-only` parsed with `splitlines()` and no `-z`, caught in review before merge)
+- **Action:** soft — both fixed; `state.py` (T-05) is the next watch point. One more graduates it.
 
 ### F-6 — `subprocess.run(text=True)` on tool output silently drops `\r`
 - **Date:** 2026-09-17 (T-03)
@@ -78,6 +78,19 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Claim:** `language` and `is_test` sit on each `Hunk` and on `FileSummary`. The spec's per-hunk state shape wants them per hunk anyway; accepted by design.
 - **Sightings:** 1
 - **Action:** none
+
+### F-8 — Redaction regex is the task's literal pattern and misses `Authorization: Bearer`
+- **Date:** 2026-09-17 (T-04)
+- **Bin:** 3 (spec gap, not a code defect)
+- **Claim:** `(?i)(token|secret|key)\s*[=:]\s*\S+` is what T-04 asked for; bearer headers and `password=` pass through into notes.
+- **Sightings:** 1
+- **Action:** none in T-04; widen the pattern in the spec before T-10's first real run on a target repo
+
+### H-2 — Harness: a reviewer finding built on an unrepresentative fixture
+- **Date:** 2026-09-17 (T-04)
+- **Bin:** harness, unbinned
+- **Claim:** boundary-reviewer rated "`uv run pytest` writes caches into the reviewed worktree" HIGH after running against a bare toy repo with no `.gitignore` or lockfile. Against a real target the tracked tree is untouched. The orchestrator disagreed with evidence and did not forward it; the reviewer re-tested and accepted.
+- **Notes:** The "reviewer wins unless you can personally verify" rule worked as intended. Reviewer briefs could say: reproduce on a fixture shaped like a real target.
 
 ### H-1 — Harness: planner task files restated spec and repo facts, and drifted
 - **Date:** 2026-09-17 (pre-build critic pass)
