@@ -47,8 +47,8 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-02)
 - **Bin:** 2
 - **Claim:** `taskfile.py` declared `TaskFileError` as its one failure type, but `path.read_text()` let `FileNotFoundError` / `PermissionError` escape. Checkable: a module that defines `<X>Error` and calls `read_text`/`open`/`subprocess.run` outside a `try` that re-raises as `<X>Error`.
-- **Sightings:** 1
-- **Action:** soft — fixed in T-02; watch `state.py` (T-05) and `checks.py` (T-04), which read files and run subprocesses
+- **Sightings:** 2 (T-02 `taskfile.py`; T-05 `cli.py` `_dump_state` left `mkdir`/`write_text` unwrapped while every other call in the function was, so a dump dir that is a file gave a raw `FileExistsError` traceback instead of exit 1 with a message. `state.py` itself was clean: every read and subprocess wrapped as `StateError`, though the wrapping branches had no tests until review.)
+- **Action:** soft — both fixed. One more graduates it. Candidate control: a function that wraps some `open`/`write_text`/`mkdir`/`subprocess.run` calls in `try` but not others.
 - **Notes:** Orchestrator and code reviewer found it independently; boundary reviewer did not. Reviewer proposed Bin 3; binned as 2 because a grep can find it.
 
 ### F-4 — Regex `match=` given an unescaped path string
@@ -99,6 +99,31 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Sightings:** 1 (one plan)
 - **Action:** all fixed in the task files and spec (commit a07aee3); `docs/runs.md` created as the home for run metrics so this file stays orchestrator-only
 - **Notes:** The critic pass earned its keep on the first plan. One critic finding was false (claimed `SystemOneResponse` lacks `.nouls/.scores/.choices`; they are properties, so struct-field introspection missed them). Verify SDK claims by calling, not by listing fields.
+
+### F-9 — Read-only mode shares an entry path with a mutating step
+- **Date:** 2026-09-17 (T-05)
+- **Bin:** 2
+- **Claim:** `cli.py` `main()` ran `_clean_stale_outputs(worktree)` (deletes `review.md`/`review.json` in the target) before branching on `--dump-state`, so an inspection mode documented as "nothing written in the worktree" deleted files in it. Checkable: a side-effecting call that precedes the branch selecting a mode declared read-only; or, per mode, a test that plants the artefacts the mutating step touches and asserts they survive.
+- **Sightings:** 1
+- **Action:** soft — fixed; the acceptance test now plants stale outputs before `--dump-state`. Watch `--record`/`--replay` (T-07) and `--calibrate` (T-11), both of which add modes to the same `main()`.
+- **Notes:** Found by boundary-reviewer by execution against a fixture with planted files; the code reviewer rated it minor as "inherited T-01 behaviour". The orchestrator had flagged it from reading the diff before either report. The green acceptance test did not seed the files it claimed to protect (see F-10).
+
+### F-10 — Tests assert a data table's shape, not its values
+- **Date:** 2026-09-17 (T-06)
+- **Bin:** 2
+- **Claim:** `tests/test_questions.py` checked id presence, uniqueness, level counts and direction, but no test pinned any severity or threshold, and none checked that §5.3 Nouls carried `criteria` at all: flipping `success_on_unverified` from blocker to minor and deleting a question's criteria both stayed green. Same shape in T-05: the "nothing written in the worktree" test never planted anything to be deleted. Checkable by mutation: a catalog/table module whose tests survive changing a value. Mechanically: a test module over a module of literals with no assertion comparing a literal to an expected literal.
+- **Sightings:** 1 (T-06 severity/threshold/criteria; T-05 planted-file gap counted with it as one batch)
+- **Action:** soft — fixed with a spec-transcribed pin table and a criteria test; the reviewer's mutation pass (10 plants) is what found it. Reviewer briefs should keep the mutation list.
+
+### H-3 — Harness: red proof that only proves the module is missing
+- **Date:** 2026-09-17 (T-05, T-06)
+- **Bin:** harness, unbinned
+- **Claim:** Both red commits failed at collection with `ModuleNotFoundError` — true red, but it proves nothing about any assertion. Both builders then edited the test files after the red commit (T-05: fixture bugs found while implementing; T-06: `isinstance` narrowing for `ty`), and the T-06 builder disclosed it had written the implementation first and staged the red commit after. The orchestrator diffed both edits: additions and equivalent narrowings only, nothing loosened, so neither was `tests_fitted_to_code`. But the process check `acceptance_tests_edited` (spec §4.1) would have fired on both, correctly, and the reviewer had no way to tell fitted from fixed without reading every line.
+- **Sightings:** 2 (one batch)
+- **Notes:** This is exactly the case the tool under construction must handle. Two implications for the spec: (1) `acceptance_tests_edited` should carry the diff of `tests/` since red so the human can judge in seconds, not fire as a bare blocker; (2) a red proof for a new module could require the builder to stub the module (`raise NotImplementedError`) so the tests fail on assertions, not imports. Neither is decided; both are planning questions for T-08/T-10.
+
+### H-1 — sighting 2 (2026-09-17, T-05/T-06 critic pass)
+- Task-critic found: T-06 stated "every question is `ge` except one" while §5.4 has two more `le` questions; T-05 never said to remove the stale `_NOT_IMPLEMENTED` gate that would have blocked its own `--task`/`--red-sha` paths; `diff_summary` would have leaked a `binary` key the spec lacks; `criterion_{n}_tested` had no severity anywhere. One human decision (severity for `_tested`), rest applied as nits. Task-file drift is now at two sightings across two batches.
 
 <!--
 ### F-1 — <one-line description>
