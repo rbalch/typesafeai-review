@@ -112,7 +112,7 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-06)
 - **Bin:** 2
 - **Claim:** `tests/test_questions.py` checked id presence, uniqueness, level counts and direction, but no test pinned any severity or threshold, and none checked that §5.3 Nouls carried `criteria` at all: flipping `success_on_unverified` from blocker to minor and deleting a question's criteria both stayed green. Same shape in T-05: the "nothing written in the worktree" test never planted anything to be deleted. Checkable by mutation: a catalog/table module whose tests survive changing a value. Mechanically: a test module over a module of literals with no assertion comparing a literal to an expected literal.
-- **Sightings:** 3 (T-06 severity/threshold/criteria; T-05 planted-file gap counted with it as one batch. T-07: `AskResult.model` sourced from the `model` argument instead of the response survived the whole suite because every fixture and test used the same model string for both. T-08: 8 of 16 mutants survived the first suite; then the fix-round test factory recomputed the "expected question ids" the same way `compose.py` does, so dropping `is_test`/`language`/`criterion_questions` from the gate stayed green. Fixed with a spec-transcribed literal id table, the same cure as T-06.)
+- **Sightings:** 4 (T-06 severity/threshold/criteria; T-05 planted-file gap counted with it as one batch. T-07: `AskResult.model` sourced from the `model` argument instead of the response survived the whole suite because every fixture and test used the same model string for both. T-08: 8 of 16 mutants survived the first suite; then the fix-round test factory recomputed the "expected question ids" the same way `compose.py` does, so dropping `is_test`/`language`/`criterion_questions` from the gate stayed green. Fixed with a spec-transcribed literal id table, the same cure as T-06. T-11: `f_beta` and `sweep_best_threshold` were each tested alone with literal betas; nothing asserted which beta `build_row` chose or that the row's best threshold came from the sweep. Swapping F0.5/F2 and replacing the sweep with the catalog threshold both survived 10 tests. Fixed with hand-computed literals through `build_row`.)
 - **Action:** **third sighting reached on 2026-09-17 (T-08). Candidate for `control-author`, not yet dispatched** — the orchestrator wants a human's view first: the working detector is the reviewer's mutation pass, and the two cures (spec-transcribed pin tables; a helper that reuses the code under test) point at a test-shape rule, not an `src/` rule. A control would have to find a test module that imports a helper from the module it tests and uses it to build expectations.
 
 ### H-3 — Harness: red proof that only proves the module is missing
@@ -173,7 +173,7 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-08)
 - **Bin:** 2
 - **Claim:** `compose.py` re-declared `slicing.py`'s three private regexes to get a symbol from a hunk header, because `HunkState` (per spec §4.2) carries no symbol. Checkable: a regex or constant literal duplicated byte-for-byte across two modules under `src/`. Fixed by giving `slicing.py` a public `symbol_from_header()`; one file outside the task's footprint.
-- **Sightings:** 1
+- **Sightings:** 2 (T-08; T-11: `_expected_hunk_questions`/`_expected_change_questions` existed in `compose.py`, `pipeline.py` and `calibrate.py`, each wrapping `questions_for`/`criterion_questions` the same way, plus `_git`/`_rev_parse` copied from the sample repo builder into `testrepo.py`. The boundary reviewer called the triple "sanctioned precedent from F-15"; it is not, F-15 asked for one source and got three wrappers of it. Fixed: two public functions in `questions.py`, all three call them; `build_repo.py` imports `testrepo`'s git helpers.)
 - **Action:** soft — fixed. The builder claimed `state.py` "sets precedent" for the copy; the boundary reviewer checked and it does not.
 
 ### F-17 — Fix-round test edits loosen assertions the fix did not require
@@ -232,6 +232,27 @@ and forcing a harness observation into one loses what makes it interesting.
 
 ### F-3 — note (2026-09-17, T-10)
 - `_clean_stale_outputs` moved from `cli.py` to `pipeline.py` with its bare `unlink`; neither module declares an error type so DEC-1 skips both, and `cli.main`'s `OSError` handler covers it. Boundary reviewer judged it the DEC-1 carve-out, not evasion. Not a sighting; noted because it is the same `unlink` corner as sighting 4.
+
+### F-22 — Analysis code picks a branch by category and no test pins which
+- **Date:** 2026-09-17 (T-11)
+- **Bin:** 2
+- **Claim:** `beta_for(severity)` maps severity → F0.5/F2; the mapping is the task's whole point, and the only tests called `f_beta(beta=...)` with literals. Same family as F-10 (shape not values), logged separately because the shape is specific: a pure function that selects a constant by category, tested only downstream of the constant. Checkable: a function whose body is `if category in (...): return A else B` with no test calling it or its caller with both categories. A mutation run finds it in seconds; the fixture reviewer found it that way.
+- **Sightings:** 1 (counted with F-10 sighting 4; logged so the specific shape has a name)
+- **Action:** soft — noted. If it recurs, a `mutmut`/`cosmic-ray` pass on `src/` in `make check` is the cure, not a control.
+
+### F-23 — Silent drop of an answer type the code does not handle
+- **Date:** 2026-09-17 (T-11)
+- **Bin:** 2
+- **Claim:** `_answer_value` returned `None` for a `Choice` answer, so the question vanished from the table with no signal. Same family as F-15 (absence reads as "did not fire") and F-1. Unreachable today (no `Choice` in the catalog); fixed to raise `CalibrateError`. Untested; the reviewer asked for a test before the first `Choice` question ships, not before merge.
+- **Sightings:** 1
+- **Action:** soft — fixed
+
+### H-1 — sighting 5 (2026-09-17, T-11 critic pass)
+- T-11 stored a case as a lone `diff.patch`; nothing in the tree slices a patch, only a git checkout. Its "edited acceptance test" case mapped to a `scope='check'` question with no probability to sweep. Scope item 6 (threshold commits to `questions.py`) contradicted its own Non-scope. Three planning defects, all fixed in the task file before dispatch: cases are `before/`/`after/` trees, the check ids are excluded from the table, the case swapped for `missing_type_hints_public`. Also: the task leaned on T-10's manual-QA list, a human step that had not happened; dropped.
+
+### H-5 — Builder judgement calls the spec does not cover, surfaced not buried
+- **Date:** 2026-09-17 (T-09..T-11)
+- T-09: markdown `Final Notes` always `None.`. T-10: `pipeline.run` takes explicit `worktree`/`base`; an acceptance assertion corrected post-red. T-11: `severity='modifier'` gets F2; `pyproject.toml` excludes `fixtures/` from ruff/ty. Every one was disclosed in the return under "deviations", none hidden. Harness, unbinned: the "report deviations with reasons" line in the builder brief is doing real work; keep it.
 
 <!--
 ### F-1 — <one-line description>

@@ -147,5 +147,6 @@ uv run ts-review --worktree <path>        # once T-01 lands
   replaces, so it stays as the reference and the control group.
 - Distribution name is `typesafe-review`, package `typesafe_review`, directory
   `typesafeai-review`. The spec and task files use the first two.
-- **Current work:** T-09 → T-10 → T-11, stacked PRs (each branches off the previous,
-  by Ryan's call on 2026-09-17). T-01..T-08 merged.
+- **Current work:** all 11 tasks built. PRs #11 (T-09) → #12 (T-10) → #13 (T-11) are
+  stacked and await merge in that order. Next: fix `.env` `TYPESAFE_BASE_URL`, real-repo
+  manual QA (T-10), grow `fixtures/` past 8 cases before any threshold change.
