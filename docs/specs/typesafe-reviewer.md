@@ -32,15 +32,17 @@ is a subprocess exit code, and the weights live in a Python file under version c
 Invocation replaces the `reviewer` subagent dispatch in the orchestrate skill:
 
 ```
-uv run review --worktree <path> [--task <task-file>] [--red-sha <sha>] [--base <ref>]
-              [--dump-state <dir>] [--record <dir>] [--replay <dir>]
+uv run ts-review --worktree <path> [--task <task-file>] [--red-sha <sha>] [--base <ref>]
+                 [--dump-state <dir>] [--record <dir>] [--replay <dir>]
+uv run ts-review --calibrate <fixtures-dir>
 ```
 
 Exit 0 on `APPROVE`, 2 on `CHANGES_REQUESTED`, 3 on `NEEDS_HUMAN`, 1 on tool failure.
 
 ### 3.1 CLI rules
 
-- **Any worktree.** `--worktree` is the only required flag. `--task` and `--red-sha`
+- **Any worktree.** `--worktree` is the only required flag (waived under
+  `--calibrate`, which reads a fixture directory instead). `--task` and `--red-sha`
   are optional so the tool runs on an arbitrary folder; when they are absent the
   per-hunk review still runs in full, the task and red-proof checks are recorded as
   `not_run`, and the verdict is `NEEDS_HUMAN` / `missing_context` (§6.6). Findings
@@ -91,8 +93,9 @@ language and kind (new file, test file, deleted lines only, etc.).
 - `NoulAnswer.noul` only. `ScoreAnswer.score` (expected value, 0..levels-1),
   `.probabilities` keyed by **int** level, `.confidence`. So `confidence` is `null`
   for every Noul finding and a number for every Score finding.
-- `RetryPolicy` default: 3 retries on 429/5xx with backoff, 10 s timeout. Set
-  `timeout=60` explicitly; a 35-question request over a large hunk may exceed 10 s.
+- `RetryPolicy()` default in SDK 0.6.0: `max_retries=2` on 408/429/5xx with backoff,
+  30 s timeout. We set `RetryPolicy(max_retries=3)` and `timeout=60` explicitly; a
+  35-question request over a large hunk may exceed the default.
 - Errors are the `TypeSafeAPIError` family (`TypeSafeAuthenticationError`,
   `TypeSafeRateLimitError`, `TypeSafeAPITimeoutError`, …). Any of them surviving
   retries → exit 1, no outputs (§6.7).
@@ -122,9 +125,10 @@ the captured output tail as `notes`. Rules that need no model:
 
 - No `--red-sha`, or the red commit passes the acceptance tests → `blocker`, finding
   `red_proof_missing`.
-- `git diff <red-sha> HEAD -- tests/` non-empty on acceptance test files → `blocker`,
-  finding `acceptance_tests_edited` → verdict `NEEDS_HUMAN` (a criterion the builder
-  changed is a planning question).
+- `git diff <red-sha> HEAD -- <files>` non-empty, where `<files>` are the test files
+  that exist at `red-sha` → `blocker`, finding `acceptance_tests_edited` → verdict
+  `NEEDS_HUMAN` (a criterion the builder changed is a planning question). New test
+  files added after the red commit never trigger this.
 - `make check` non-zero → `blocker`, finding `gate_failed`, notes = first failing stage.
 
 ### 4.2 State shape (per hunk)
@@ -229,7 +233,7 @@ One Noul **per acceptance criterion**, built in a loop from the task file:
 
 | id | type | severity | note |
 |---|---|---|---|
-| `new_behaviour_untested` | score 0–3 (none / some / most / all new paths covered) | important ≤ 1; blocker ≤ 1 when `touches_high_risk` fires | change-wide |
+| `new_behaviour_untested` | score 0–3 (none / some / most / all new paths covered) | important ≤ 1; blocker ≤ 1 when `touches_high_risk` fires. **Fires low**: the only question with `direction: le` | change-wide |
 | `touches_high_risk` | noul: credentials, auth, disk writes outside the repo | modifier only | change-wide |
 | `patches_unit_under_test` | noul | important | per test hunk |
 | `mock_hides_integration` | noul | minor | per test hunk |
@@ -245,9 +249,10 @@ All in `review/compose.py`; nothing here touches the model.
 2. **Severity is a table lookup** on question id, with modifiers (`touches_high_risk`
    promotes test findings to blocker). No model chooses severity.
 3. **Dedupe** the same id across adjacent hunks of one symbol into one finding.
-4. **Verdict:** any deterministic-check `blocker` or any model `blocker` → `CHANGES_REQUESTED`;
-   any `important` → `CHANGES_REQUESTED`; `acceptance_tests_edited` or any
-   `criterion_*_satisfied` in the grey zone → `NEEDS_HUMAN`; else `APPROVE`.
+4. **Verdict:** `acceptance_tests_edited`, any `criterion_*_satisfied` in the grey
+   zone, or missing context → `NEEDS_HUMAN`; else any deterministic-check `blocker`,
+   any model `blocker`, or any `important` → `CHANGES_REQUESTED`; else `APPROVE`.
+   `NEEDS_HUMAN` takes precedence: a human question outranks a fix round.
 5. **Score** is derived, never chosen: 1 if any `success_on_unverified`/`auth_passes_on_error`
    or a criterion unsatisfied; 2 if any blocker or failed check; 3 if any important;
    4 if only minor/nit; 5 if none. Same hard constraints as `reviewer.md`.
@@ -282,9 +287,10 @@ Two phases. Nothing in `assets/` or the current build loop changes until phase 1
 This package is its own repo now, so the layout sits at the root, not under `tools/`.
 
 ```
-pyproject.toml      package `typesafe-review`; deps typesafe-sdk, pyyaml; script `review`
+pyproject.toml      package `typesafe-review`; deps typesafe-sdk, pyyaml; script `ts-review`
 src/typesafe_review/
-  cli.py            argparse entry, flag rules (§3.1), exit codes
+  cli.py            argparse entry, flag rules (§3.1)
+  verdict.py        Verdict enum + exit codes (imported by cli and compose)
   checks.py         subprocess runners for the deterministic table
   slicing.py        git diff → hunks, context, neighbours (§4.4)
   taskfile.py       planner task file → task dict (frontmatter + Acceptance bullets)
@@ -317,9 +323,9 @@ The reviewer is tooling, like ruff or ty. It should not land in the target codeb
 `src/`, and Python under `.claude/` fights ruff, ty and `pythonpath`. So:
 
 - Publish `typesafe-review` (own repo or a git URL). Scaffolded projects add it to the
-  `dev` dependency group; `uv run review` resolves to it.
+  `dev` dependency group; `uv run ts-review` resolves to it.
 - `assets/` changes then are small: one dep line, `TYPESAFE_API_KEY=` in `.env.example`,
-  the orchestrate skill's reviewer dispatch → `uv run review ...`, `reviewer.md` deleted.
+  the orchestrate skill's reviewer dispatch → `uv run ts-review ...`, `reviewer.md` deleted.
 - Upgrades reach every project without re-scaffolding.
 
 ## 9. Calibration
@@ -329,11 +335,12 @@ Thresholds above are guesses. Before trusting them:
 1. Build a fixture set from this repo's own history: ~20 diffs, each hand-labelled with
    the findings a human reviewer would raise. Include known bad shapes (swallowed
    except, empty-secret default, edited acceptance test).
-2. `uv run review --calibrate fixtures/` prints per-question precision/recall at the
+2. `uv run ts-review --calibrate fixtures/` prints per-question precision/recall at the
    current thresholds and the threshold that maximises F0.5 (precision-weighted) for
    minors, F2 (recall-weighted) for blockers.
 3. Thresholds are constants in `questions.py`, reviewed like any code. Record each
-   change in `docs/ledger-findings.md`.
+   change in `docs/runs.md` (run metrics and threshold history; `docs/ledger-findings.md`
+   is the governance triage ledger and stays orchestrator-only).
 4. Re-run calibration when `TYPESAFE_DEFAULT_MODEL` changes. Pin the model id in
    `.env.example`, not `jev-latest`, once a version is calibrated.
 
@@ -344,7 +351,7 @@ Thresholds above are guesses. Before trusting them:
   Measure `usage.input_tokens` in the first runs.
 - **Question count per request.** Docs say "many" with no limit. ~35 per hunk is the
   plan; test it.
-- **Cost per review.** Unknown until priced. Track `engine.input_tokens` in the ledger.
+- **Cost per review.** Unknown until priced. Track `engine.input_tokens` in `docs/runs.md`.
 - **Who writes the fix prose when a template is not enough.** Out of scope for v1; the
   orchestrator already forms its own view before forwarding.
 
