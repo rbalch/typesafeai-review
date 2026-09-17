@@ -92,16 +92,26 @@ def test_exit_1_when_no_candidate_base_ref_exists(tmp_path: Path, capsys: pytest
 
 
 def test_stale_outputs_removed_sibling_untouched(tmp_path: Path) -> None:
+    """Step 0 deletes only `ts-review.md` / `ts-review.json`; the LLM reviewer's
+    `review.md` / `review.json` (distinct names, spec §3/§9) and an unrelated
+    `review.txt` sibling are left alone.
+    """
     repo = make_repo(tmp_path, branch='main')
-    (repo / 'review.md').write_text('stale md')
-    (repo / 'review.json').write_text('{"stale": true}')
+    (repo / 'ts-review.md').write_text('stale md')
+    (repo / 'ts-review.json').write_text('{"stale": true}')
+    (repo / 'review.md').write_text('llm reviewer md')
+    (repo / 'review.json').write_text('{"llm_reviewer": true}')
     (repo / 'review.txt').write_text('leave me alone')
 
     rc = main(['--worktree', str(repo)])
 
     assert rc == EXIT_TOOL_FAILURE
-    assert not (repo / 'review.md').exists()
-    assert not (repo / 'review.json').exists()
+    assert not (repo / 'ts-review.md').exists()
+    assert not (repo / 'ts-review.json').exists()
+    assert (repo / 'review.md').exists()
+    assert (repo / 'review.md').read_text() == 'llm reviewer md'
+    assert (repo / 'review.json').exists()
+    assert (repo / 'review.json').read_text() == '{"llm_reviewer": true}'
     assert (repo / 'review.txt').exists()
     assert (repo / 'review.txt').read_text() == 'leave me alone'
 

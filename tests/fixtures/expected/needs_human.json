@@ -1,0 +1,79 @@
+{
+  "verdict": "NEEDS_HUMAN",
+  "score": 1,
+  "summary": "Human judgement is needed before this can proceed.",
+  "worktree": "/app/.claude/worktrees/T-09-render",
+  "base": "develop",
+  "required_checks": [
+    {
+      "name": "red proof",
+      "result": "pass",
+      "notes": "1 acceptance test fails at deadbeef"
+    },
+    {
+      "name": "green at HEAD",
+      "result": "pass",
+      "notes": "same test passes"
+    },
+    {
+      "name": "make check",
+      "result": "pass",
+      "notes": "exit 0"
+    }
+  ],
+  "findings": [],
+  "uncertain": [
+    {
+      "severity": "important",
+      "file": "src/example/pipeline.py",
+      "symbol_or_area": "<change>",
+      "issue": "Score-based `mixed_responsibility` fired but confidence was below the gate.",
+      "why_it_matters": "Low-confidence model answers are listed for the orchestrator, not acted on.",
+      "concrete_fix": "A human should look at `pipeline.py` directly.",
+      "blocks_merge": true,
+      "question_id": "mixed_responsibility",
+      "probability": 0.6,
+      "confidence": 0.42
+    },
+    {
+      "severity": "blocker",
+      "file": null,
+      "symbol_or_area": "<change>",
+      "issue": "Whether the change satisfies \"reject malformed input\" could not be told confidently.",
+      "why_it_matters": "A grey-zone criterion answer is a planning question, not a fix.",
+      "concrete_fix": "A human should confirm whether this criterion is met.",
+      "blocks_merge": true,
+      "question_id": "criterion_1_satisfied",
+      "probability": 0.55,
+      "confidence": null
+    },
+    {
+      "severity": "important",
+      "file": "src/example/pipeline.py",
+      "symbol_or_area": "validate",
+      "issue": "Expected an answer for `duplicates_helper` but the response never included one.",
+      "why_it_matters": "An unanswered question cannot be scored either way.",
+      "concrete_fix": "Re-run the review; if this persists, check the request payload.",
+      "blocks_merge": true,
+      "question_id": "duplicates_helper",
+      "probability": null,
+      "confidence": null
+    }
+  ],
+  "counts": {
+    "blocker": 0,
+    "important": 0,
+    "minor": 0,
+    "nit": 0
+  },
+  "stop_reason": "needs_human",
+  "engine": {
+    "model": "jev-latest",
+    "requests": 7,
+    "input_tokens": 41200
+  },
+  "notes": [
+    "note one",
+    "note two"
+  ]
+}
