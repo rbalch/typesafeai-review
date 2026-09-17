@@ -5,3 +5,4 @@
 These rules are enforced by CI. Violating one fails the build. To change a rule you must supersede its decision — author a replacement, mark this one superseded, update the control and its pragma, and rebuild this view. Never edit code to evade a control.
 
 - **[DEC-0] No file under `governance/views/` may be named `AGENTS.md`, and `governance/views/RULES.md` must exist.** (block)
+- **[DEC-1] No file under `src/` may call `git rev-parse` with `--git-dir` among its literal arguments unless the same file also calls `git rev-parse` with `--show-toplevel`. `--git-dir` proves a path is *inside* a git repository; it says nothing about whether the path is the repository *root*. Code that needs the root must ask for it with `--show-toplevel` and compare the resolved path to the one it was given.** (block)
