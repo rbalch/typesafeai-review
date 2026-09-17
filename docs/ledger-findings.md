@@ -206,6 +206,33 @@ and forcing a harness observation into one loses what makes it interesting.
 ### H-3 — sighting 5 (2026-09-17, T-09)
 - The red proof for two test files was one commit; `test_render.py` failed at collection (`ModuleNotFoundError`) and pytest never reached `test_cli.py`'s renamed assertion, so one red run proved one file. The code reviewer ran `test_cli.py` alone at the red SHA and confirmed it was red for the right reason. Keep the `NotImplementedError` stub instruction in builder briefs (it was omitted this time) so the red run reaches assertions, and when a task touches two test files, run each alone at the red SHA.
 
+### F-20 — A measured column in docs/runs.md filled with a neighbouring metric
+- **Date:** 2026-09-17 (T-10)
+- **Bin:** 3
+- **Claim:** both rows said `hunks: 3`; `slice_diff` returns 2, the third fixture file is the change-wide request. Spec §10 says measure, never fabricate, and the number was read off the fixture directory instead of the slicer. A test could assert `runs.md` against `slice_diff` for the sample row only; not worth it. Fixed in the fix round with the slicer's own output pasted.
+- **Sightings:** 1
+- **Action:** none
+
+### F-21 — Catch-all error label names one cause for several
+- **Date:** 2026-09-17 (T-10)
+- **Bin:** 3
+- **Claim:** `cli.py` printed `git error:` for any `OSError | SubprocessError`, after `pipeline.py` gained non-git file I/O behind that handler. Fails closed either way; the text misleads. Split into `git error:` / `io error:` in the fix round. Boundary reviewer found it by reading; code reviewer by fault injection.
+- **Sightings:** 1
+- **Action:** none
+
+### H-3 — sighting 6 (2026-09-17, T-10)
+- The `NotImplementedError` stub instruction was back in the brief and worked: 3 of 4 red on assertions. The fourth (replay miss → exit 1) passed at red through the old T-01 placeholder; the reviewer proved it load-bearing at HEAD by mutation. One post-red assertion edit: "id present in `ts-review.md`" became "id in JSON findings + template text in md", because `render.py` never emits raw ids in markdown (T-09's contract). A wrong criterion, corrected in the test rather than reported as a planning finding; the reviewer judged it non-weakening and flagged it. Counts as an H-1 planning miss too: the T-10 acceptance bullet was written before T-09's template existed.
+
+### H-4 — Environment facts in AGENTS.md copied into `.env` verbatim
+- **Date:** 2026-09-17 (T-10)
+- AGENTS.md gives the endpoint as `https://api.typesafe.ai/v1/systemone`; `.env` set `TYPESAFE_BASE_URL` to that, and the SDK appends `/v1/systemone` itself, so the first live call 404'd. The builder stripped the path in its shell and did not touch `.env`. Harness, unbinned: AGENTS.md should say what the SDK variable expects, not what the HTTP endpoint is. Human to fix `.env`.
+
+### F-15 — note (2026-09-17, T-10)
+- The T-08 fix held at the first two-module boundary it was built for: `pipeline.py` derives the request set from `questions_for`/`criterion_questions`, the same source `compose.py` expects, and the reviewer's dropped-question mutation produced `NEEDS_HUMAN / unanswered_questions`. No new sighting.
+
+### F-3 — note (2026-09-17, T-10)
+- `_clean_stale_outputs` moved from `cli.py` to `pipeline.py` with its bare `unlink`; neither module declares an error type so DEC-1 skips both, and `cli.main`'s `OSError` handler covers it. Boundary reviewer judged it the DEC-1 carve-out, not evasion. Not a sighting; noted because it is the same `unlink` corner as sighting 4.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
