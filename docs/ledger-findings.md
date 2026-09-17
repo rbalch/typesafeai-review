@@ -112,8 +112,8 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-06)
 - **Bin:** 2
 - **Claim:** `tests/test_questions.py` checked id presence, uniqueness, level counts and direction, but no test pinned any severity or threshold, and none checked that §5.3 Nouls carried `criteria` at all: flipping `success_on_unverified` from blocker to minor and deleting a question's criteria both stayed green. Same shape in T-05: the "nothing written in the worktree" test never planted anything to be deleted. Checkable by mutation: a catalog/table module whose tests survive changing a value. Mechanically: a test module over a module of literals with no assertion comparing a literal to an expected literal.
-- **Sightings:** 2 (T-06 severity/threshold/criteria; T-05 planted-file gap counted with it as one batch. T-07: `AskResult.model` sourced from the `model` argument instead of the response survived the whole suite because every fixture and test used the same model string for both; only the reviewer's mutation plant found it.)
-- **Action:** soft — both fixed; T-07 added a fixture whose response model differs from the requested one. One more graduates it. The mutation pass in the reviewer brief is the working detector; a mechanical control would need to find test inputs where two distinct fields carry the same literal.
+- **Sightings:** 3 (T-06 severity/threshold/criteria; T-05 planted-file gap counted with it as one batch. T-07: `AskResult.model` sourced from the `model` argument instead of the response survived the whole suite because every fixture and test used the same model string for both. T-08: 8 of 16 mutants survived the first suite; then the fix-round test factory recomputed the "expected question ids" the same way `compose.py` does, so dropping `is_test`/`language`/`criterion_questions` from the gate stayed green. Fixed with a spec-transcribed literal id table, the same cure as T-06.)
+- **Action:** **third sighting reached on 2026-09-17 (T-08). Candidate for `control-author`, not yet dispatched** — the orchestrator wants a human's view first: the working detector is the reviewer's mutation pass, and the two cures (spec-transcribed pin tables; a helper that reuses the code under test) point at a test-shape rule, not an `src/` rule. A control would have to find a test module that imports a helper from the module it tests and uses it to build expectations.
 
 ### H-3 — Harness: red proof that only proves the module is missing
 - **Date:** 2026-09-17 (T-05, T-06)
@@ -160,6 +160,31 @@ and forcing a harness observation into one loses what makes it interesting.
 
 ### H-3 — sighting 3 (2026-09-17, T-07)
 - The builder brief asked for a `NotImplementedError` stub so the red proof fails on assertions, not imports. It did: 10 tests red on the stub. Post-red test edits were a ruff reformat, one unused import, and an autouse env fixture the SDK's client constructor forced (it refuses to build without `TYPESAFE_API_KEY` even with a fake transport). Additions only; the orchestrator diffed the formatted red file against HEAD. The stub approach answers implication (2) from the first H-3 entry; keep it in every builder brief.
+
+### F-15 — Answers consumed by presence, not by what was asked: absence reads as "did not fire"
+- **Date:** 2026-09-17 (T-08)
+- **Bin:** 2
+- **Claim:** `compose.py` iterated the ids present in the response; a response with no answers at all, in full context, composed to APPROVE 5/5. `Choice` answers were never read. Checkable: a consumer of a keyed response that iterates `response.items()` without diffing against the set of keys it requested. Same family as F-1 (a success branch reached by a condition broader than what the code relies on), logged separately because the shape is specific: request set vs. response set.
+- **Sightings:** 1
+- **Action:** soft — fixed: compose derives the expected set from the catalog and any gap forces `NEEDS_HUMAN` with `stop_reason: unanswered_questions`; a `Choice` in the catalog raises. Spec §6.6 did not cover a partial response; the PR asks the human to accept the addition. Watch T-10, which is the first place the request and response sets are built by two different modules.
+- **Notes:** The orchestrator flagged it from the builder's own "Choice silently ignored" disclosure before either report; both reviewers then confirmed by execution. First T-08 review scores: boundary 2/5, code 3/5.
+
+### F-16 — A sibling module's private helper copied instead of exposed
+- **Date:** 2026-09-17 (T-08)
+- **Bin:** 2
+- **Claim:** `compose.py` re-declared `slicing.py`'s three private regexes to get a symbol from a hunk header, because `HunkState` (per spec §4.2) carries no symbol. Checkable: a regex or constant literal duplicated byte-for-byte across two modules under `src/`. Fixed by giving `slicing.py` a public `symbol_from_header()`; one file outside the task's footprint.
+- **Sightings:** 1
+- **Action:** soft — fixed. The builder claimed `state.py` "sets precedent" for the copy; the boundary reviewer checked and it does not.
+
+### F-17 — Fix-round test edits loosen assertions the fix did not require
+- **Date:** 2026-09-17 (T-08)
+- **Bin:** 2
+- **Claim:** four `findings == []` / exact-list assertions became "no finding with this id" during a factory rewrite; the neutral backdrop still composed to APPROVE with no findings, so the strict forms passed. "Nothing else fired" silently stopped being checked. Checkable per test file: an assertion of `== []` or an exact list at the red SHA that becomes an `all(...)`/`any(...)`/filtered form at HEAD. This is exactly what `tests_fitted_to_code` (spec §5.4) asks Jev; the deterministic version is a diff shape.
+- **Sightings:** 1
+- **Action:** soft — reverted. The orchestrator spotted the shape in the assertion-line diff; the code reviewer proved the strict forms still passed. Candidate deterministic check for `checks.py` in T-10: report weakened assertion shapes in `tests/` since red, so `acceptance_tests_edited` carries evidence (see H-3).
+
+### H-3 — sighting 4 (2026-09-17, T-08)
+- Post-red edits again, and this time large: a 389-line factory rewrite forced by a real fix (the unanswered gate made sparse inputs NEEDS_HUMAN). Additions and tightening, plus the four loosenings in F-17. The orchestrator's assertion-line grep (`git diff <red> HEAD -- tests/ | grep -E '^[-+].*assert'`) was enough to find them in one screen. Worth making that grep a deterministic check.
 
 <!--
 ### F-1 — <one-line description>
