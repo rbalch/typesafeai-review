@@ -1,0 +1,24 @@
+{
+  "folders": [
+    { "name": "app", "path": "/app" },
+    { "name": "home", "path": "/home/dev" }
+  ],
+  "settings": {
+    // /home/dev holds .oh-my-zsh, .vscode-server and a node_modules tree. Watching them
+    // pins a CPU for no benefit; hiding them keeps search results useful.
+    "files.watcherExclude": {
+      "**/.oh-my-zsh/**": true,
+      "**/.vscode-server/**": true,
+      "**/.local/lib/node_modules/**": true,
+      "**/.local/share/uv/**": true,
+      "**/.codegraph/**": true
+    },
+    "search.exclude": {
+      "**/.oh-my-zsh/**": true,
+      "**/.vscode-server/**": true,
+      "**/.local/lib/node_modules/**": true,
+      "**/.local/share/uv/**": true,
+      "**/.codegraph/**": true
+    }
+  }
+}

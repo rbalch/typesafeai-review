@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+develop-eggs/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+coverage.xml
+nosetests.xml
+
+# JS / Node
+node_modules/
+dist/
+build/
+.npm-install-changed.json
+
+# Env / secrets
+*.env*
+!.env.example
+key.json
+secret.pem
+
+# macOS
+**/.DS_Store
+
+# IDEs
+.idea/
+.vscode/settings.json
+
+# devcontainer
+.devcontainer/devcontainer-lock.json
+
+# Linting caches
+.ruff_cache/
+.pytest_cache/
+
+# Logs
+*.log
+
+# codegraph — a tree-sitter index is build output, and it rebuilds itself on watch
+.codegraph/
+
+# Claude Code — project settings are shared; local overrides are not
+.claude/settings.local.json
+
+# Misc
+*.sqlite3
+*.mo
+*.pot
+docs/_build/
+target/
+
+# Build-loop review artifacts — per-round scratch, never committed
+review.md
+review.json
+
+# agent worktrees — orchestrate creates these; they are checkouts, not content
+.claude/worktrees/
+
+# task files — local working notes; the PR carries each shipped brief verbatim
+tasks/*
+!tasks/README.md

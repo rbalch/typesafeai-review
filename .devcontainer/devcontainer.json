@@ -1,0 +1,100 @@
+{
+  "name": "typesafeai-review",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/app",
+  "runServices": ["dev"],
+
+  "forwardPorts": [8000],
+
+  "postCreateCommand": "sudo chown -R dev:dev /app /home/dev && uv sync",
+  "shutdownAction": "stopCompose",
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "zsh": {
+            "path": "/usr/bin/zsh"
+          }
+        },
+        "editor.formatOnSave": true,
+
+        "[javascript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[javascriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[typescript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[typescriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[json]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[jsonc]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[html]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[css]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[scss]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit",
+            "source.fixAll": "explicit"
+          }
+        },
+        "[markdown]": {
+          "editor.formatOnSave": false,
+          "editor.wordWrap": "on",
+          "editor.rulers": []
+        },
+        "[yaml]": { "editor.formatOnSave": false },
+        "[dockercompose]": { "editor.formatOnSave": false },
+
+        "prettier.singleQuote": true,
+        "prettier.trailingComma": "es5",
+        "prettier.tabWidth": 2,
+        "prettier.semi": true,
+        "prettier.printWidth": 100,
+
+        "ruff.lineLength": 120,
+
+        "eslint.validate": ["javascript", "javascriptreact", "typescript", "typescriptreact"]
+      },
+      "extensions": [
+        "bierner.markdown-mermaid",
+        "charliermarsh.ruff",
+        "dbaeumer.vscode-eslint",
+        "docker.docker",
+        "donjayamanne.githistory",
+        "eamodio.gitlens",
+        "esbenp.prettier-vscode",
+        "google.gemini-cli-vscode-ide-companion",
+        "google.geminicodeassist",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-keymap",
+        "mhutchie.git-graph",
+        "ms-azuretools.vscode-containers",
+        "ms-azuretools.vscode-docker",
+        "ms-python.debugpy",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.vscode-python-envs",
+        "ms-vscode.makefile-tools",
+        "waderyan.gitblame"
+      ]
+    }
+  },
+
+  // git and gh are installed in dev.Dockerfile instead of as features, so they exist
+  // under a plain `docker compose up` too — features are applied only by the
+  // devcontainer CLI, and `make init` talks to compose directly.
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "moby": false,
+      "dockerDashComposeVersion": "v2"
+    }
+  },
+  "portsAttributes": {
+    "8000": {
+      "label": "app"
+    }
+  }
+}

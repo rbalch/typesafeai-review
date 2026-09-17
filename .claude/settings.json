@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__codegraph__*"
+    ]
+  },
+  "worktree": {
+    "baseRef": "head"
+  },
+  "respectGitignore": false
+}

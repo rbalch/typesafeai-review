@@ -1,0 +1,48 @@
+[project]
+name = "typesafe-review"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "pyyaml>=6.0.0",
+    "ruff>=0.15.0",
+    "ty>=0.0.14",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/typesafe_review"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests", "controls", "governance"]
+
+[tool.ruff.lint]
+extend-select = [
+  "B",   # flake8-bugbear: mutable defaults, swallowed excepts, loop-variable capture
+  "I",   # import sorting
+  "RUF", # ruff's own correctness rules
+  "UP",  # pyupgrade
+]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ty.environment]
+# The governance scripts are executables, not an installed package, so ty needs the
+# same search path pytest gets from `pythonpath` below.
+extra-paths = ["governance/scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "governance/scripts"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true

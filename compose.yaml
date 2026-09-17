@@ -1,0 +1,56 @@
+name: typesafeai-review
+
+services:
+  dev:
+    container_name: typesafeai-review-dev
+    build:
+      context: .
+      dockerfile: dev.Dockerfile
+    ports:
+      - 8000:8000
+    volumes:
+      # app
+      - ./:/app:cached
+      - /app/.venv  # Prevents host from overwriting container's venv
+
+      # Named volumes for persistent data
+      - root-history:/home/dev/history
+      - vscode-server:/home/dev/.vscode-server
+
+      # Shared credential volumes, external so every project reuses the same ones and
+      # `docker compose down -v` cannot destroy them. Deliberately NOT bind mounts of
+      # ~/.ssh and ~/.config/gh: a host ssh config is often a symlink to a path that does
+      # not exist inside this container, and a bind mount would expose every key you own
+      # rather than the one this container needs.
+      # Populated once per machine by `make init` — see README, "Container credentials".
+      - dev-ssh:/home/dev/.ssh
+      - dev-gh:/home/dev/.config/gh
+
+      # User config mounts
+      - ~/.gemini:/home/dev/.gemini
+      - ~/.cache/google-vscode-extension:/home/dev/.cache/google-vscode-extension
+      - ~/.claude:/home/dev/.claude
+      - ~/.claude.json:/home/dev/.claude.json
+      # Nix vault (universal context layer)
+      - ~/.nix-vault:/home/dev/.nix-vault
+      - /var/run/docker.sock:/var/run/docker.sock
+      # no-mistakes
+      - /home/dev/.no-mistakes
+      # pi
+      - /home/dev/.pi
+    stdin_open: true
+    tty: true
+    env_file:
+      # Optional: .env is gitignored, so a fresh clone has none until you copy .env.example.
+      - path: .env
+        required: false
+
+volumes:
+  root-history:
+  vscode-server:
+
+  # Machine-wide, not project-scoped. `make init` creates them if they are missing.
+  dev-ssh:
+    external: true
+  dev-gh:
+    external: true

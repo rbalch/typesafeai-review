@@ -1,0 +1,21 @@
+{
+  "controls": [
+    {
+      "decision": "DEC-0",
+      "enforcement": "block",
+      "path": "controls/fitness/view_naming.py",
+      "pragma": "supported",
+      "sha256": null,
+      "type": "fitness_fn"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "DEC-0",
+      "kind": "negative",
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "No generated file is named AGENTS.md"
+    }
+  ]
+}
