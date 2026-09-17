@@ -43,6 +43,21 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Action:** none — taste; the strings are user-facing messages and will be deleted as tasks land
 - **Notes:** Raised by boundary-reviewer as Bin 3; agreed.
 
+### F-3 — I/O exception leaks past a module's declared error type
+- **Date:** 2026-09-17 (T-02)
+- **Bin:** 2
+- **Claim:** `taskfile.py` declared `TaskFileError` as its one failure type, but `path.read_text()` let `FileNotFoundError` / `PermissionError` escape. Checkable: a module that defines `<X>Error` and calls `read_text`/`open`/`subprocess.run` outside a `try` that re-raises as `<X>Error`.
+- **Sightings:** 1
+- **Action:** soft — fixed in T-02; watch `state.py` (T-05) and `checks.py` (T-04), which read files and run subprocesses
+- **Notes:** Orchestrator and code reviewer found it independently; boundary reviewer did not. Reviewer proposed Bin 3; binned as 2 because a grep can find it.
+
+### F-4 — Regex `match=` given an unescaped path string
+- **Date:** 2026-09-17 (T-02)
+- **Bin:** 3
+- **Claim:** `pytest.raises(..., match=str(p))` treats a filesystem path as a regex. Harmless with tmp_path today.
+- **Sightings:** 1
+- **Action:** fixed by the orchestrator in the squash (`re.escape`); no ruff rule covers it, not worth one
+
 ### H-1 — Harness: planner task files restated spec and repo facts, and drifted
 - **Date:** 2026-09-17 (pre-build critic pass)
 - **Bin:** harness, unbinned
