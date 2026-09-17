@@ -27,7 +27,29 @@ and forcing a harness observation into one loses what makes it interesting.
 
 ## Findings
 
-_None yet. The first one arrives the first time you dislike something an agent did._
+### F-1 — Input validator accepts a superset of what the code then acts on
+- **Date:** 2026-09-17 (T-01)
+- **Bin:** 2
+- **Claim:** A path check uses `git rev-parse --git-dir` (true anywhere inside a repo) while the code that follows assumes the repo root; a subdirectory passed as `--worktree` had `sub/review.md` deleted. Checkable: any `rev-parse --git-dir` guard not paired with a `--show-toplevel` equality.
+- **Sightings:** 1
+- **Action:** soft — fixed in T-01 (compare `--show-toplevel` to the path), no control
+- **Notes:** Found by the orchestrator, not either reviewer. Both reviewers scored 5/5 with zero findings; the fail-closed reading of "root only" was in the task text and still slipped past both.
+
+### F-2 — Task ids hardcoded as strings in code
+- **Date:** 2026-09-17 (T-01)
+- **Bin:** 3
+- **Claim:** `cli.py` maps unimplemented flags to task ids (`T-02`, `T-04`, ...) as literals; renumbering the plan drifts silently.
+- **Sightings:** 1
+- **Action:** none — taste; the strings are user-facing messages and will be deleted as tasks land
+- **Notes:** Raised by boundary-reviewer as Bin 3; agreed.
+
+### H-1 — Harness: planner task files restated spec and repo facts, and drifted
+- **Date:** 2026-09-17 (pre-build critic pass)
+- **Bin:** harness, unbinned
+- **Claim:** The 11 task files carried facts that contradicted the spec or the tree: T-01 said the repo had no governance harness and told the builder to rewrite `Makefile`; T-10 told the builder to *create* this ledger file; T-04 and T-06 both owned severity for the same finding ids; T-06/T-08 assumed one Score direction while spec §5.5 fires low; T-11 could not run because T-01 required `--worktree`. Eight task-critic runs plus an orchestrator read caught 6 blockers and ~20 nits before any code.
+- **Sightings:** 1 (one plan)
+- **Action:** all fixed in the task files and spec (commit a07aee3); `docs/runs.md` created as the home for run metrics so this file stays orchestrator-only
+- **Notes:** The critic pass earned its keep on the first plan. One critic finding was false (claimed `SystemOneResponse` lacks `.nouls/.scores/.choices`; they are properties, so struct-field introspection missed them). Verify SDK claims by calling, not by listing fields.
 
 <!--
 ### F-1 — <one-line description>
