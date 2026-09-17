@@ -47,8 +47,8 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-02)
 - **Bin:** 2
 - **Claim:** `taskfile.py` declared `TaskFileError` as its one failure type, but `path.read_text()` let `FileNotFoundError` / `PermissionError` escape. Checkable: a module that defines `<X>Error` and calls `read_text`/`open`/`subprocess.run` outside a `try` that re-raises as `<X>Error`.
-- **Sightings:** 3 (T-02 `taskfile.py`; T-05 `cli.py` `_dump_state` left `mkdir`/`write_text` unwrapped while every other call in the function was, so a dump dir that is a file gave a raw `FileExistsError` traceback instead of exit 1 with a message. `state.py` itself was clean: every read and subprocess wrapped as `StateError`, though the wrapping branches had no tests until review. T-07 `ask.py` declared `AskFailed` as the one failure type, then `Record.save` (`mkdir`/`write_bytes`) and `Replay.load` (caught `FileNotFoundError` only, so `IsADirectoryError`/`PermissionError` escaped) leaked raw `OSError`; a corrupt cached body would have escaped too had the SDK not wrapped it.)
-- **Action:** **graduated 2026-09-17: DEC-1 `controls/fitness/io_error_wrapping.py`, PR #9.** Subset: free functions only, any `try` counts; it catches the T-02 shape, not T-07's recorder methods. Accepted as a narrow true rule over a wide false one. Candidate control: a module that defines `<X>Error` (or `<X>Failed`) and calls `open`/`read_text`/`read_bytes`/`write_text`/`write_bytes`/`mkdir`/`subprocess.run` outside a `try` whose handler raises `<X>Error`.
+- **Sightings:** 4 (T-02 `taskfile.py`; T-05 `cli.py` `_dump_state` left `mkdir`/`write_text` unwrapped while every other call in the function was, so a dump dir that is a file gave a raw `FileExistsError` traceback instead of exit 1 with a message. `state.py` itself was clean: every read and subprocess wrapped as `StateError`, though the wrapping branches had no tests until review. T-07 `ask.py` declared `AskFailed` as the one failure type, then `Record.save` (`mkdir`/`write_bytes`) and `Replay.load` (caught `FileNotFoundError` only, so `IsADirectoryError`/`PermissionError` escaped) leaked raw `OSError`; a corrupt cached body would have escaped too had the SDK not wrapped it. T-09 `render.py` `write_outputs`: the rollback loop's `Path.unlink` calls sat outside any `try` while every write and `os.replace` was wrapped; a failed unlink would have escaped as raw `OSError` **and** skipped the remaining files, breaking the "neither file exists after a failure" invariant. DEC-1 passed green: `unlink` and `os.replace` are not in the control's method list. Both reviewers found it; the control did not.)
+- **Action:** **graduated 2026-09-17: DEC-1 `controls/fitness/io_error_wrapping.py`, PR #9.** Subset: free functions only, any `try` counts; it catches the T-02 shape, not T-07's recorder methods. Accepted as a narrow true rule over a wide false one. **T-09 shows the list is one method short**: cleanup paths use `unlink` / `os.replace`. One sighting of the gap; a second and DEC-1 gets superseded with the two methods added. Candidate control: a module that defines `<X>Error` (or `<X>Failed`) and calls `open`/`read_text`/`read_bytes`/`write_text`/`write_bytes`/`mkdir`/`subprocess.run` outside a `try` whose handler raises `<X>Error`.
 - **Notes:** Orchestrator and code reviewer found it independently; boundary reviewer did not. Reviewer proposed Bin 3; binned as 2 because a grep can find it.
 
 ### F-4 — Regex `match=` given an unescaped path string
@@ -185,6 +185,26 @@ and forcing a harness observation into one loses what makes it interesting.
 
 ### H-3 — sighting 4 (2026-09-17, T-08)
 - Post-red edits again, and this time large: a 389-line factory rewrite forced by a real fix (the unanswered gate made sparse inputs NEEDS_HUMAN). Additions and tightening, plus the four loosenings in F-17. The orchestrator's assertion-line grep (`git diff <red> HEAD -- tests/ | grep -E '^[-+].*assert'`) was enough to find them in one screen. Worth making that grep a deterministic check.
+
+### F-18 — Test fixture values outside the domain the producer can emit
+- **Date:** 2026-09-17 (T-09)
+- **Bin:** 3
+- **Claim:** a NEEDS_HUMAN golden carried `probability=1.6`; `compose.py` can only emit [0, 1]. Render does not validate, correctly, so nothing failed; the example misleads a reader. A machine could check a fixture against a schema, but no schema exists for the renderer's input and writing one for this is ceremony. Taste; fixed in the fix round.
+- **Sightings:** 1
+- **Action:** none
+
+### F-19 — Defensive helper shipped without a test that reaches it
+- **Date:** 2026-09-17 (T-09)
+- **Bin:** 1
+- **Claim:** `_table_cell` (pipe/newline escaping for the Required Checks table) existed for raw subprocess notes but no fixture carried a `|` or `\n`, so a no-op mutation survived. Coverage tooling would show the branch as executed but the mutation-survival needs a mutation run; the builder disclosed it. Related to F-3's note "wrapping branches had no tests until review" and F-14. Fixed in the fix round with a literal expected row.
+- **Sightings:** 1
+- **Action:** none; if it recurs, add `--cov` with a per-file floor to `make test` rather than a control.
+
+### H-1 — sighting 4 (2026-09-17, T-09 critic pass)
+- T-09 gave `render_markdown` an `engine` argument nothing in the spec or template consumes, and said `file:symbol` with no rule for `Finding.file = None`, which `compose.py` emits for every change-wide finding. Two nits, both applied by the orchestrator before the builder. Same cause as the three prior sightings: signatures written before the code they must fit. The renamed outputs (`ts-review.*`, Ryan's call) were a planning gap too: spec §9 compares two reviewers' JSON on one worktree and gave them the same file name.
+
+### H-3 — sighting 5 (2026-09-17, T-09)
+- The red proof for two test files was one commit; `test_render.py` failed at collection (`ModuleNotFoundError`) and pytest never reached `test_cli.py`'s renamed assertion, so one red run proved one file. The code reviewer ran `test_cli.py` alone at the red SHA and confirmed it was red for the right reason. Keep the `NotImplementedError` stub instruction in builder briefs (it was omitted this time) so the red run reaches assertions, and when a task touches two test files, run each alone at the red SHA.
 
 <!--
 ### F-1 — <one-line description>
