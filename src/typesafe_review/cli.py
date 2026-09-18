@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import shutil
 import subprocess
@@ -29,6 +28,7 @@ from typesafe_sdk import constants as typesafe_constants
 from typesafe_review import pipeline
 from typesafe_review.ask import AskFailed, RequestItem, ask_all
 from typesafe_review.calibrate import run as run_calibrate
+from typesafe_review.case import CaseError, write_state_files
 from typesafe_review.checks import CheckError
 from typesafe_review.compose import ComposeInvariantError
 from typesafe_review.env import EnvError, load_env
@@ -58,6 +58,7 @@ _PIPELINE_ERRORS = (
     StateError,
     ComposeInvariantError,
     RenderError,
+    CaseError,
 )
 
 
@@ -100,6 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--record', type=Path, default=None, help='record API responses to this directory')
     parser.add_argument('--replay', type=Path, default=None, help='replay recorded API responses from this directory')
     parser.add_argument('--calibrate', type=Path, default=None, help='run calibration against a labelled fixtures dir')
+    parser.add_argument(
+        '--case',
+        type=Path,
+        default=None,
+        help='write a real-run calibration case to this directory (RA-04; implies recording responses there)',
+    )
     parser.add_argument(
         '--env-file', dest='env_file', type=Path, default=None, help='load TYPESAFE_* keys from this file first'
     )
@@ -160,9 +167,11 @@ def _resolve_base(worktree: Path, base: str | None) -> str | None:
 
 
 def _dump_state(worktree: Path, base: str, task_arg: str | None, red_sha: str | None, dump_dir: Path) -> int:
-    """`--dump-state`: slice, build every state shape, write it to `dump_dir` as JSON,
-    print a token estimate per file to stderr, and exit — no API call, nothing written
-    in `worktree`.
+    """`--dump-state`: slice, build every state shape, write it to `dump_dir` as
+    JSON (through `case.write_state_files`, so it is redacted the same way a
+    `--case`'s own `state/` files are -- RA-04 fix round 1), print a token
+    estimate per file to stderr, and exit — no API call, nothing written in
+    `worktree`.
 
     `--dump-state` only ever reads `task_arg` as a file path (RA-02's PR source is out
     of scope here: this mode inspects state shapes offline, it never calls `gh`).
@@ -191,21 +200,13 @@ def _dump_state(worktree: Path, base: str, task_arg: str | None, red_sha: str | 
         return EXIT_TOOL_FAILURE
 
     try:
-        dump_dir.mkdir(parents=True, exist_ok=True)
-
-        for i, hunk_state in enumerate(hunk_states, start=1):
-            encoded = json.dumps(hunk_state, indent=2)
-            path = dump_dir / f'hunk-{i:02d}.json'
-            path.write_text(encoded)
-            print(f'{path.name}: ~{len(encoded) // 4} tokens', file=sys.stderr)
-
-        change_encoded = json.dumps(change_state, indent=2)
-        change_path = dump_dir / 'change.json'
-        change_path.write_text(change_encoded)
-        print(f'{change_path.name}: ~{len(change_encoded) // 4} tokens', file=sys.stderr)
-    except OSError as e:
-        print(f'{dump_dir}: cannot write state dump ({e.strerror or e})', file=sys.stderr)
+        written = write_state_files(dump_dir, hunk_states, change_state)
+    except CaseError as e:
+        print(str(e), file=sys.stderr)
         return EXIT_TOOL_FAILURE
+
+    for filename, size in written:
+        print(f'{filename}: ~{size // 4} tokens', file=sys.stderr)
 
     return EXIT_APPROVE
 
@@ -331,6 +332,12 @@ def _resolve_task_and_red_sha(
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.case is not None and args.record is not None:
+        # RA-04 item 1: `--case` always records to `<case>/responses`; an explicit
+        # `--record` elsewhere would leave two, silently disagreeing homes for the
+        # same run's responses.
+        parser.error('argument --case: not allowed with argument --record (--case always records to <case>/responses)')
 
     trace: list[str] = []
     try:

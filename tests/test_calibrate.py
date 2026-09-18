@@ -10,10 +10,12 @@ question id (replay only, against the committed `fixtures/` tree).
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
+from typesafe_review import case, pipeline
 from typesafe_review.calibrate import (
     MIN_POSITIVES,
     CalibrateError,
@@ -25,6 +27,9 @@ from typesafe_review.calibrate import (
     sweep_best_threshold,
 )
 from typesafe_review.questions import Question
+from typesafe_review.slicing import slice_diff
+from typesafe_review.state import build_change_state, build_hunk_states, load_acceptance_tests, load_conventions
+from typesafe_review.testrepo import build_two_stage_repo
 from typesafe_review.verdict import EXIT_APPROVE, EXIT_TOOL_FAILURE
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / 'fixtures'
@@ -326,3 +331,111 @@ def test_main_calibrate_fixtures_exits_0(capsys: pytest.CaptureFixture[str]) -> 
     assert rc == EXIT_APPROVE
     out = capsys.readouterr().out
     assert 'swallows_exception' in out
+
+
+# ---------------------------------------------------------------------------
+# RA-04: the second (state) fixture kind.
+# ---------------------------------------------------------------------------
+
+_SWALLOWS_EXCEPTION_CASE = FIXTURES_DIR / 'swallows_exception'
+
+
+def _build_state_case(dest: Path, tree_case: Path) -> None:
+    """Build a state-kind case under `dest` from `tree_case`'s own `before/`/
+    `after/`, reusing `tree_case`'s existing `responses/` verbatim: since the
+    sliced diff, task (none here) and model are identical, `write_case`'s own
+    `ask_request_key` hashes land on exactly the same filenames already recorded
+    there -- no live call, no re-recording."""
+    built = build_two_stage_repo(dest / '_repo', tree_case / 'before', tree_case / 'after')
+    change = slice_diff(built.repo, built.base_sha)
+    conventions = load_conventions(built.repo)
+    acceptance_tests = load_acceptance_tests(built.repo, None)
+    hunk_states = build_hunk_states(None, change, conventions)
+    change_state = build_change_state(None, change, acceptance_tests)
+    expected = case.expected_by_key(None, hunk_states, change_state)
+    model = pipeline.resolve_model()
+    meta = {
+        'repo': str(built.repo),
+        'base': built.base_sha,
+        'head': 'HEAD',
+        'task_source': 'none',
+        'model': model,
+        'date': '2026-01-01T00:00:00+00:00',
+        'verdict': 'CHANGES_REQUESTED',
+        'score': 2,
+    }
+    case_dir = dest / 'case'
+    case.write_case(case_dir, hunk_states, change_state, expected, {'ok': True}, 'md', meta)
+    shutil.copytree(tree_case / 'responses', case_dir / 'responses', dirs_exist_ok=True)
+    shutil.copy(tree_case / 'labels.json', case_dir / 'labels.json')
+
+
+def test_state_kind_case_yields_same_rows_as_equivalent_tree_kind_case(tmp_path: Path) -> None:
+    tree_fixtures = tmp_path / 'tree_fixtures'
+    tree_fixtures.mkdir()
+    shutil.copytree(_SWALLOWS_EXCEPTION_CASE, tree_fixtures / 'swallows_exception')
+    rows_tree = {row.question_id: row for row in calibrate(tree_fixtures)}
+    assert rows_tree  # sanity: the tree case itself still calibrates
+
+    state_fixtures = tmp_path / 'state_fixtures'
+    state_fixtures.mkdir()
+    _build_state_case(state_fixtures, _SWALLOWS_EXCEPTION_CASE)
+    rows_state = {row.question_id: row for row in calibrate(state_fixtures)}
+
+    assert set(rows_state) == set(rows_tree)
+    for question_id, tree_row in rows_tree.items():
+        assert rows_state[question_id] == tree_row
+
+
+def test_corrupt_state_case_response_raises_calibrate_error_naming_the_file(tmp_path: Path) -> None:
+    state_fixtures = tmp_path / 'state_fixtures'
+    state_fixtures.mkdir()
+    _build_state_case(state_fixtures, _SWALLOWS_EXCEPTION_CASE)
+    case_dir = state_fixtures / 'case'
+
+    responses_dir = case_dir / 'responses'
+    corrupted = next(responses_dir.iterdir())
+    corrupted.write_bytes(b'{not valid json at all')
+
+    with pytest.raises(CalibrateError) as excinfo:
+        calibrate(state_fixtures)
+    assert str(corrupted) in str(excinfo.value) or corrupted.name in str(excinfo.value)
+
+
+def test_corrupt_state_case_response_exits_1_via_main(tmp_path: Path) -> None:
+    state_fixtures = tmp_path / 'state_fixtures'
+    state_fixtures.mkdir()
+    _build_state_case(state_fixtures, _SWALLOWS_EXCEPTION_CASE)
+    case_dir = state_fixtures / 'case'
+
+    responses_dir = case_dir / 'responses'
+    corrupted = next(responses_dir.iterdir())
+    corrupted.write_bytes(b'{not valid json at all')
+
+    rc = main(['--calibrate', str(state_fixtures)])
+    assert rc == EXIT_TOOL_FAILURE
+
+
+def test_unlabelled_case_is_skipped_and_reported(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    fixtures = tmp_path / 'fixtures'
+    fixtures.mkdir()
+    unlabelled = _make_case(fixtures, before=_BEFORE_SRC, after=_AFTER_SRC_WITH_SWALLOW, labels={})
+    (unlabelled / 'labels.json').unlink()
+
+    rows = calibrate(fixtures)
+    assert rows == []
+    err = capsys.readouterr().err
+    assert 'skipped' in err
+    assert str(unlabelled) in err
+
+
+def test_nested_real_case_is_found(tmp_path: Path) -> None:
+    fixtures = tmp_path / 'fixtures'
+    real_dir = fixtures / 'real'
+    real_dir.mkdir(parents=True)
+    shutil.copytree(_SWALLOWS_EXCEPTION_CASE, real_dir / 'swallows_exception')
+
+    rows = calibrate(fixtures)
+    ids = {row.question_id for row in rows}
+    assert 'swallows_exception' in ids
+    assert 'bare_except' in ids

@@ -873,3 +873,21 @@ def expected_change_questions(task: Task | None) -> dict[str, Question]:
     if task is not None:
         expected.update(criterion_questions(task))
     return expected
+
+
+#: `labels.json`/`keys.json` key for change-wide questions (matches `compose.py`'s
+#: own `_CHANGE_AREA` convention). One home for `calibrate.py` and `case.py` to
+#: import (RA-04 fix round 1, item 3): both used to carry their own copy of this
+#: literal to dodge a real import cycle (`calibrate.py` imports `pipeline.py`,
+#: which imports `case.py`) -- `questions.py` has no dependency on any of the
+#: three, so it is the one place both can import from without one.
+CHANGE_KEY = '<change>'
+
+
+def send_questions(questions: dict[str, Question]) -> dict[str, Noul | Choice | Score]:
+    """The subset of a question set that actually goes to the model: every
+    question with a primitive. The three deterministic-check ids (spec §4.1)
+    carry `primitive=None` -- they never leave `checks.py` -- so they never
+    appear here. Shared by `pipeline.py`, `case.py` and `calibrate.py` (RA-04 fix
+    round 1, item 3): one selection, not three hand-maintained copies."""
+    return {question_id: q.primitive for question_id, q in questions.items() if q.primitive is not None}

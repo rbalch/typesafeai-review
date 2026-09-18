@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 import typesafe_review.checks as checks_module
-from typesafe_review.checks import CheckError, run_checks
+from typesafe_review.checks import CheckError, redact, run_checks
 
 _PYPROJECT = """\
 [project]
@@ -202,6 +202,22 @@ def test_secret_like_output_is_redacted(tmp_path: Path) -> None:
     make = _result(report, 'make check')
     assert 'token=abc123' not in make.notes
     assert '<redacted>' in make.notes
+
+
+def test_redact_strips_url_embedded_credentials() -> None:
+    assert redact('https://u:p@h/x') == 'https://<redacted>@h/x'
+
+
+def test_redact_leaves_a_bare_ssh_username_alone() -> None:
+    # RA-04 fix round 2: `ssh://git@host/...` has no password component -- only a
+    # `user:pass@` pair is a credential worth redacting, not a bare `user@host`.
+    assert redact('ssh://git@h/x') == 'ssh://git@h/x'
+
+
+def test_redact_still_strips_token_shaped_text() -> None:
+    # existing redact behaviour unchanged by the new URL pattern.
+    assert redact('token=abc123') == '<redacted>'
+    assert 'abc123' not in redact('token=abc123')
 
 
 def test_temp_checkout_is_removed_even_when_pytest_fails(tmp_path: Path) -> None:

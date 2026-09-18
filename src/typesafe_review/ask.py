@@ -48,6 +48,19 @@ def request_key(state: JSONContent, questions: Mapping[str, Question], model: st
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def response_from_bytes(key: str, raw: bytes) -> SystemOneResponse:
+    """Parse `raw` (a cached or recorded response body) into a `SystemOneResponse`,
+    wrapping any parse failure into `AskFailed` -- the same failure contract a live
+    response gets in `ask_all`'s own `one()`. Public: `calibrate.py`'s state-kind
+    case path replays straight from `responses/` without going through `ask_all`,
+    but a corrupt cache file there must fail exactly as loudly, not with a raw SDK
+    exception (RA-04 fix round 1)."""
+    try:
+        return SystemOneResponse.from_http_response(httpx2.Response(200, content=raw))
+    except (TypeSafeError, OSError) as error:
+        raise AskFailed(key, error) from error
+
+
 class ReplayMiss(Exception):
     """No recorded response exists for a request key, naming the hunk it was for."""
 
@@ -55,6 +68,19 @@ class ReplayMiss(Exception):
         super().__init__(f'no recorded response for hunk {hunk_key!r} (request key {key})')
         self.key = key
         self.hunk_key = hunk_key
+
+
+class ReplayMissByKey(ReplayMiss):
+    """`ReplayMiss` raised from `Replay.load_by_key`: there is no hunk identity to
+    name, just the `request_key` itself (RA-04 fix round 1 MINOR: the base
+    class's message unconditionally said "hunk", which read wrong for a
+    state-kind case looked up by `request_key` alone). Still an instance of
+    `ReplayMiss`, so an existing `except ReplayMiss` catches it too."""
+
+    def __init__(self, key: str) -> None:
+        Exception.__init__(self, f'no recorded response for request key {key!r}')
+        self.key = key
+        self.hunk_key = key
 
 
 class AskFailed(Exception):
@@ -123,6 +149,17 @@ class Replay:
     def save(self, key: str, body: bytes) -> None:
         return None
 
+    def load_by_key(self, key: str) -> bytes:
+        """Read a cached response body by its `request_key` alone, with no hunk
+        identity to name in the error (RA-04): `calibrate.py`'s state-kind case
+        path replays straight from a `keys.json`-recorded `request_key`, never
+        re-deriving it from a (possibly redacted) dumped state."""
+        path = self.dir / f'{key}.json'
+        try:
+            return path.read_bytes()
+        except FileNotFoundError as error:
+            raise ReplayMissByKey(key) from error
+
 
 @dataclass(frozen=True)
 class AskResult:
@@ -184,7 +221,7 @@ async def ask_all(
             started = time.monotonic()
             try:
                 if cached is not None:
-                    response = SystemOneResponse.from_http_response(httpx2.Response(200, content=cached))
+                    response = response_from_bytes(key, cached)
                 else:
                     response = await get_client().system_one(state, questions, model=model)
                     recorder.save(key, response.raw_http_response.content)

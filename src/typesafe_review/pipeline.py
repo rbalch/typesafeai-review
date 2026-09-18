@@ -15,11 +15,13 @@ place that turns one of those, or a bare `OSError`/`subprocess.SubprocessError`,
 a stderr message and exit 1 (spec §6.7); mapping them here too would just be a second
 place restating the same table.
 
-`_send_questions` is the one seam that has to agree with `compose.py`'s own idea of
-what a hunk or the change should have been asked (ledger F-15): both call the exact
-same `questions_for`/`criterion_questions` from `questions.py`, so the request set
-this module sends and the expected set `compose.py` checks answers against can never
-drift apart into two hand-maintained lists.
+`questions.send_questions` is the one seam that has to agree with `compose.py`'s own
+idea of what a hunk or the change should have been asked (ledger F-15): both call the
+exact same `questions_for`/`criterion_questions` from `questions.py`, so the request
+set this module sends and the expected set `compose.py` checks answers against can
+never drift apart into two hand-maintained lists. `case.py` and `calibrate.py` share
+this same `send_questions` (RA-04 fix round 1, item 3), rather than each carrying
+its own copy.
 """
 
 from __future__ import annotations
@@ -27,18 +29,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlsplit, urlunsplit
 
-from typesafe_sdk import Choice, JSONContent, Noul, Score
+from typesafe_sdk import JSONContent
 from typesafe_sdk import constants as typesafe_constants
 
 from typesafe_review.ask import AskResult, Live, Record, Recorder, Replay, RequestItem, ask_all
+from typesafe_review.case import case_recorder, expected_by_key, write_case
 from typesafe_review.checks import run_checks
 from typesafe_review.compose import Context, compose
-from typesafe_review.questions import Question as CatalogQuestion
-from typesafe_review.questions import expected_change_questions, expected_hunk_questions
+from typesafe_review.questions import expected_change_questions, expected_hunk_questions, send_questions
 from typesafe_review.render import OUTPUT_JSON, OUTPUT_MD, render_json, render_markdown, write_outputs
 from typesafe_review.slicing import MAX_HUNK_LINES, Change, slice_diff
 from typesafe_review.state import (
@@ -92,13 +97,35 @@ def resolve_recorder(args: argparse.Namespace) -> Recorder:
     return Live()
 
 
-def _send_questions(expected: dict[str, CatalogQuestion]) -> dict[str, Noul | Choice | Score]:
-    """The subset of an expected question set that actually goes to the model:
-    every question with a primitive. The three deterministic-check ids (§4.1) carry
-    `primitive=None` -- they never leave `checks.py` -- so they never reach here."""
-    return {
-        question_id: question.primitive for question_id, question in expected.items() if question.primitive is not None
-    }
+def _strip_url_userinfo(url: str) -> str:
+    """Rebuild an `http(s)://` URL with any `user:pass@` userinfo removed. Never
+    touches an `ssh://` URL or the scp-like `git@host:path` form -- neither has an
+    `http(s)` scheme, so `urlsplit` reports no netloc to strip from, and both are
+    returned unchanged (RA-04 fix round 1: `git remote get-url origin` can embed a
+    credential in an `https` remote's URL)."""
+    parts = urlsplit(url)
+    if parts.scheme not in ('http', 'https') or '@' not in parts.netloc:
+        return url
+    host = parts.netloc.rsplit('@', 1)[-1]
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+
+
+def _repo_identity(worktree: Path) -> str:
+    """`meta.json`'s `repo` field (RA-04): the `origin` remote URL with any
+    embedded userinfo stripped, or `worktree` itself if there is no remote (a
+    throwaway/local-only checkout). `write_case` also runs the whole `meta` dict
+    through `checks.redact` before writing it, as a second, independent guard
+    (RA-04 fix round 1) -- this function's own job is just not to hand a live
+    credential to that guard in the first place."""
+    result = subprocess.run(
+        ['git', '-C', str(worktree), 'remote', 'get-url', 'origin'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return _strip_url_userinfo(result.stdout.strip())
+    return str(worktree)
 
 
 def _hunk_request_key(index: int) -> str:
@@ -114,12 +141,12 @@ def _build_requests(task: Task | None, hunk_states: list[HunkState], change_stat
         (
             _hunk_request_key(i),
             cast(JSONContent, dict(hunk_state)),
-            _send_questions(expected_hunk_questions(hunk_state['file']['language'], hunk_state['file']['is_test'])),
+            send_questions(expected_hunk_questions(hunk_state['file']['language'], hunk_state['file']['is_test'])),
         )
         for i, hunk_state in enumerate(hunk_states)
     ]
     requests.append(
-        (_CHANGE_KEY, cast(JSONContent, dict(change_state)), _send_questions(expected_change_questions(task)))
+        (_CHANGE_KEY, cast(JSONContent, dict(change_state)), send_questions(expected_change_questions(task)))
     )
     return requests
 
@@ -187,6 +214,11 @@ def run(
     requests = _build_requests(task, hunk_states, change_state)
     model = resolve_model()
     recorder = resolve_recorder(args)
+    if args.case is not None:
+        # RA-04: every response this run gets, live or replayed, also lands under
+        # `args.case/responses/` -- `cli.py`'s argparse validation already rejects
+        # `--case` together with an explicit `--record` elsewhere.
+        recorder = case_recorder(args.case, recorder)
     ask_result: AskResult = asyncio.run(ask_all(requests, model=model, recorder=recorder))
 
     hunk_answers = [(hunk_states[i], ask_result.answers[_hunk_request_key(i)]) for i in range(len(hunk_states))]
@@ -203,5 +235,23 @@ def run(
         review, ask_result, worktree, base, notes, task_source, red_sha_source, head=head, range_source=range_source
     )
     write_outputs(out_dir, md, json_obj)
+
+    if args.case is not None:
+        # RA-04: `hunk_states`/`change_state` here are the same unredacted states
+        # just sent above -- `write_case` redacts its own `state/` copy; the
+        # `responses/` directory is already complete, filled during `ask_all` by
+        # the `case_recorder` wrapper.
+        meta = {
+            'repo': _repo_identity(worktree),
+            'base': base,
+            'head': head,
+            'task_source': task_source,
+            'model': model,
+            'date': datetime.now(timezone.utc).isoformat(),
+            'verdict': review.verdict.value,
+            'score': review.score,
+        }
+        case_expected = expected_by_key(task, hunk_states, change_state)
+        write_case(args.case, hunk_states, change_state, case_expected, json_obj, md, meta)
 
     return _EXIT_BY_VERDICT[review.verdict]

@@ -1,11 +1,18 @@
-"""Offline calibration against labelled fixtures (T-11, spec §9).
+"""Offline calibration against labelled fixtures (T-11, spec §9; RA-04 item 2/3).
 
-`calibrate(fixtures_dir)` replays every case under `fixtures_dir` (one directory per
-case: `before/`, `after/`, `labels.json`, optional `task.md`, a `responses/` dir of
-recorded answers) and computes precision, recall and an F-beta score at the catalog
-threshold for every model-scored question id that has labels, plus the threshold
-(swept 0.05..0.95) that maximises that F-beta. `run`/`main` are the CLI-facing
-entry points; `cli.py`'s `--calibrate` calls `run` directly.
+`calibrate(fixtures_dir)` replays every case under `fixtures_dir` and
+`fixtures_dir/real/` and computes precision, recall and an F-beta score at the
+catalog threshold for every model-scored question id that has labels, plus the
+threshold (swept 0.05..0.95) that maximises that F-beta. `run`/`main` are the
+CLI-facing entry points; `cli.py`'s `--calibrate` calls `run` directly.
+
+Two case kinds, told apart by `_is_state_case`: the tree kind (`before/`, `after/`,
+`labels.json`, optional `task.md`, a `responses/` dir keyed by content hash --
+`calibrate.py` builds a throwaway repo and slices it itself), and the state kind
+(`case.write_case`'s own output: `state/` -- hunk + change JSON plus `keys.json`,
+the judge's checklist -- `responses/`, `labels.json`, no `before/`/`after/`). The
+state kind never rebuilds a repo or re-slices a diff: every question id and its
+`request_key` already live in `state/keys.json`.
 
 Every state + question set sent here is built from `questions.py`'s own
 `questions_for`/`criterion_questions` -- the same functions `pipeline.py` and
@@ -29,17 +36,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from typesafe_sdk import Choice, JSONContent, Noul, Score, SystemOneResponse
+from typesafe_sdk import JSONContent, SystemOneResponse
 
 from typesafe_review import pipeline
-from typesafe_review.ask import AskFailed, AskResult, Record, Replay, RequestItem, ask_all
+from typesafe_review.ask import (
+    AskFailed,
+    AskResult,
+    Record,
+    Replay,
+    ReplayMiss,
+    RequestItem,
+    ask_all,
+    response_from_bytes,
+)
 from typesafe_review.questions import (
     CATALOG,
+    CHANGE_KEY,
     Direction,
     Question,
     Severity,
     expected_change_questions,
     expected_hunk_questions,
+    send_questions,
 )
 from typesafe_review.slicing import Hunk, SlicingError, slice_diff
 from typesafe_review.state import (
@@ -61,11 +79,6 @@ MIN_POSITIVES = 5
 
 #: The threshold sweep, spec §9 item 2: 0.05..0.95 in steps of 0.05.
 THRESHOLD_SWEEP: tuple[float, ...] = tuple(round(0.05 + 0.05 * i, 2) for i in range(19))
-
-#: `labels.json` key for change-wide questions (matches `compose.py`'s own
-#: `_CHANGE_AREA` convention, restated here because `labels.json` is this module's own
-#: file format, not an import from `compose.py`).
-CHANGE_KEY = '<change>'
 
 _SEVERITY_ORDER: dict[str, int] = {'blocker': 0, 'important': 1, 'modifier': 2, 'minor': 3, 'nit': 4}
 
@@ -228,10 +241,6 @@ def load_case_task(case_dir: Path) -> Task | None:
         raise CalibrateError(str(e)) from e
 
 
-def _send_questions(expected: dict[str, Question]) -> dict[str, Noul | Choice | Score]:
-    return {qid: q.primitive for qid, q in expected.items() if q.primitive is not None}
-
-
 def _expected_by_key(hunks: list[Hunk], task: Task | None) -> dict[str, dict[str, Question]]:
     expected: dict[str, dict[str, Question]] = {
         hunk_key(hunk): expected_hunk_questions(hunk.language, hunk.is_test) for hunk in hunks
@@ -251,6 +260,67 @@ def _validate_labels(
                 raise CalibrateError(f'{case_dir}: labels.json has unknown question id {question_id!r} for key {key!r}')
 
 
+def _is_state_case(case_dir: Path) -> bool:
+    """Whether `case_dir` is the second fixture kind (RA-04): a `state/` directory
+    and no `before/`/`after/` -- a real-run case `write_case` produced, never a
+    tree case that happens to lack them (both are required together)."""
+    return (case_dir / 'state').is_dir() and not (case_dir / 'before').exists() and not (case_dir / 'after').exists()
+
+
+def load_state_keys(case_dir: Path) -> dict[str, dict[str, object]]:
+    """Parse `case_dir/state/keys.json` -- the judge's checklist `write_case`
+    wrote: `{key: {"state": ..., "questions": [...], "request_key": ...}}`. Raises
+    `CalibrateError` if it is missing, unreadable, or not a JSON object."""
+    path = case_dir / 'state' / 'keys.json'
+    try:
+        text = path.read_text()
+    except OSError as e:
+        raise CalibrateError(f'{path}: cannot read keys.json ({e})') from e
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise CalibrateError(f'{path}: invalid JSON ({e})') from e
+    if not isinstance(data, dict):
+        raise CalibrateError(f'{path}: keys.json must be a JSON object')
+    return data
+
+
+def _validate_labels_against_keys(
+    case_dir: Path, labels: dict[str, dict[str, bool]], keys: dict[str, dict[str, object]]
+) -> None:
+    for key, question_labels in labels.items():
+        if key not in keys:
+            raise CalibrateError(f'{case_dir}: labels.json key {key!r} does not match any hunk or {CHANGE_KEY!r}')
+        expected_ids = cast(list[str], keys[key]['questions'])
+        for question_id in question_labels:
+            if question_id not in expected_ids:
+                raise CalibrateError(f'{case_dir}: labels.json has unknown question id {question_id!r} for key {key!r}')
+
+
+def _load_state_case_answers(case_dir: Path, keys: dict[str, dict[str, object]]) -> dict[str, SystemOneResponse]:
+    """Replay a state-kind case's `responses/` directly by the `request_key` each
+    `keys.json` entry carries -- never rehashing the (possibly redacted) dumped
+    state (RA-04 human decision). `ask.response_from_bytes` (RA-04 fix round 1)
+    gives a corrupt cache file the same `AskFailed`-wrapped failure a live
+    `ask_all` run would get, so it never escapes here as a raw SDK exception."""
+    replay = Replay(case_dir / 'responses')
+    answers: dict[str, SystemOneResponse] = {}
+    for key, info in keys.items():
+        request_key = cast(str, info['request_key'])
+        response_path = case_dir / 'responses' / f'{request_key}.json'
+        try:
+            raw = replay.load_by_key(request_key)
+        except ReplayMiss as e:
+            raise CalibrateError(f'{case_dir}: no recorded response for {key!r} (request key {request_key})') from e
+        except OSError as e:
+            raise CalibrateError(f'{case_dir}: cannot read recorded response for {key!r} ({response_path}): {e}') from e
+        try:
+            answers[key] = response_from_bytes(request_key, raw)
+        except AskFailed as e:
+            raise CalibrateError(f'{case_dir}: corrupt recorded response for {key!r} ({response_path}): {e}') from e
+    return answers
+
+
 def _build_requests(
     hunks: list[Hunk], hunk_states: list[HunkState], change_state: ChangeState, task: Task | None
 ) -> list[RequestItem]:
@@ -258,12 +328,12 @@ def _build_requests(
         (
             hunk_key(hunk),
             cast(JSONContent, dict(hunk_state)),
-            _send_questions(expected_hunk_questions(hunk.language, hunk.is_test)),
+            send_questions(expected_hunk_questions(hunk.language, hunk.is_test)),
         )
         for hunk, hunk_state in zip(hunks, hunk_states, strict=True)
     ]
     requests.append(
-        (CHANGE_KEY, cast(JSONContent, dict(change_state)), _send_questions(expected_change_questions(task)))
+        (CHANGE_KEY, cast(JSONContent, dict(change_state)), send_questions(expected_change_questions(task)))
     )
     return requests
 
@@ -317,18 +387,37 @@ def _answer_value(answers: SystemOneResponse, question_id: str) -> float | None:
     return None
 
 
+def _case_dirs(fixtures_dir: Path) -> list[Path]:
+    """Every case directory `calibrate` walks (RA-04 item 3): `fixtures_dir/*/`
+    plus `fixtures_dir/real/*/` -- `real/` itself is never a case, only its
+    children are, so a bare `fixtures/real/.gitkeep` (keeping the directory in git
+    before any real case is labelled) never gets treated as one."""
+    try:
+        top = sorted(p for p in fixtures_dir.iterdir() if p.is_dir() and p.name != 'real')
+    except OSError as e:
+        raise CalibrateError(f'{fixtures_dir}: cannot list fixture cases ({e})') from e
+
+    real_dir = fixtures_dir / 'real'
+    if not real_dir.is_dir():
+        return top
+
+    try:
+        real_cases = sorted(p for p in real_dir.iterdir() if p.is_dir())
+    except OSError as e:
+        raise CalibrateError(f'{real_dir}: cannot list fixture cases ({e})') from e
+    return top + real_cases
+
+
 def calibrate(fixtures_dir: Path) -> list[QuestionRow]:
-    """Replay every case under `fixtures_dir` and return one `QuestionRow` per
-    model-scored question id that has at least one label anywhere.
+    """Replay every case under `fixtures_dir` (and `fixtures_dir/real/`) and return
+    one `QuestionRow` per model-scored question id that has at least one label
+    anywhere.
 
     Raises `CalibrateError` for an unknown label key or question id, and `AskFailed`
     (from `ask.py`) for a replay miss -- both propagate to `run`, which turns them
     into exit 1.
     """
-    try:
-        case_dirs = sorted(p for p in fixtures_dir.iterdir() if p.is_dir())
-    except OSError as e:
-        raise CalibrateError(f'{fixtures_dir}: cannot list fixture cases ({e})') from e
+    case_dirs = _case_dirs(fixtures_dir)
 
     model = pipeline.resolve_model()
     #: Every question definition seen: the static catalog plus, per case with a
@@ -340,10 +429,35 @@ def calibrate(fixtures_dir: Path) -> list[QuestionRow]:
 
     for case_dir in case_dirs:
         if not (case_dir / 'labels.json').exists():
+            print(f'{case_dir}: skipped: no labels.json', file=sys.stderr)
             continue
 
         labels = load_labels(case_dir)
         task = load_case_task(case_dir)
+
+        if _is_state_case(case_dir):
+            # RA-04 second fixture kind: no `before/`/`after/` to build a throwaway
+            # repo from, no `slice_diff` -- every question id + its `request_key`
+            # already lives in `state/keys.json`, written by `write_case` at real-run
+            # time.
+            keys = load_state_keys(case_dir)
+            _validate_labels_against_keys(case_dir, labels, keys)
+            if task is not None:
+                questions_by_id.update(expected_change_questions(task))
+
+            answers_by_key = _load_state_case_answers(case_dir, keys)
+            for key, info in keys.items():
+                answers = answers_by_key.get(key)
+                if answers is None:
+                    continue
+                case_labels = labels.get(key, {})
+                for question_id in cast(list[str], info['questions']):
+                    value = _answer_value(answers, question_id)
+                    if value is None:
+                        continue
+                    label = case_labels.get(question_id, False)
+                    samples.setdefault(question_id, []).append((label, value))
+            continue
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_root = Path(tmp)
