@@ -33,6 +33,20 @@ _REDACT_RE = re.compile(r'(?i)(token|secret|key)\s*[=:]\s*\S+')
 #: doesn't cover (ssh URLs and scp-like `git@host:path` are left alone there too).
 _URL_CREDENTIAL_RE = re.compile(r'://[^/@:\s]+:[^/@\s]+@')
 
+#: `Authorization: Bearer <token>` headers -- F-8 sighting 3's corpus (DEC-3): the
+#: token itself rarely contains the literal word "token", so `_REDACT_RE` never saw
+#: it. Matches the header name and the whole token in one go.
+_BEARER_RE = re.compile(r'(?i)authorization\s*:\s*bearer\s+\S+')
+
+#: Well-known bare credential prefixes that carry no `key=`/`token=` label of their
+#: own -- exactly how F-8 sighting 2's `gh` "Bad credentials: ghp_..." message and a
+#: leaked GitHub/OpenAI/AWS key read in the wild. `\b` keeps this from matching
+#: inside a longer identifier.
+_BARE_SECRET_RE = re.compile(r'\b(?:ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16})\b')
+
+#: A PEM-encoded key's header line, e.g. `-----BEGIN RSA PRIVATE KEY-----`.
+_PEM_RE = re.compile(r'-----BEGIN [A-Z0-9 ]+-----')
+
 
 class CheckError(Exception):
     """A subprocess or filesystem operation needed for a check failed to run."""
@@ -60,14 +74,21 @@ class CheckReport:
 
 def redact(text: str) -> str:
     """Replace anything that looks like `token=`/`secret=`/`key=<value>` with
-    `<redacted>`, and any URL's embedded `user:pass@` with `<redacted>@` (RA-04
-    fix round 1: a `git remote get-url origin` can carry a credential this way).
-    Public so any module that surfaces captured subprocess or `gh` output, or a
-    git remote URL, in an error message or a written file (`prsource.py`'s
-    `fetch_pr`, RA-02 fix round 1; `case.py`'s `meta.json`, RA-04) can reuse the
-    same patterns instead of hand-rolling a second one."""
+    `<redacted>`, any URL's embedded `user:pass@` with `<redacted>@` (RA-04 fix
+    round 1: a `git remote get-url origin` can carry a credential this way), an
+    `Authorization: Bearer <token>` header, a bare well-known credential prefix
+    (`ghp_`/`sk-`/`AKIA`, DEC-3), and a PEM key header line. Public so any module
+    that surfaces captured subprocess or `gh` output, or a git remote URL, in an
+    error message or a written file (`prsource.py`'s `fetch_pr`, RA-02 fix round
+    1; `case.py`'s `meta.json`, RA-04) can reuse the same patterns instead of
+    hand-rolling a second one. Measured against a fixed must-scrub/must-keep
+    corpus by `controls/fitness/redaction_corpus.py` (DEC-3) -- widen the corpus,
+    not just this function, when a new leak shape shows up."""
     text = _REDACT_RE.sub('<redacted>', text)
-    return _URL_CREDENTIAL_RE.sub('://<redacted>@', text)
+    text = _URL_CREDENTIAL_RE.sub('://<redacted>@', text)
+    text = _BEARER_RE.sub('<redacted>', text)
+    text = _BARE_SECRET_RE.sub('<redacted>', text)
+    return _PEM_RE.sub('<redacted>', text)
 
 
 def _tail_notes(output: str) -> str:
