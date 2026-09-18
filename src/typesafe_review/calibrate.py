@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -31,8 +30,8 @@ from pathlib import Path
 from typing import cast
 
 from typesafe_sdk import Choice, JSONContent, Noul, Score, SystemOneResponse
-from typesafe_sdk import constants as typesafe_constants
 
+from typesafe_review import pipeline
 from typesafe_review.ask import AskFailed, AskResult, Record, Replay, RequestItem, ask_all
 from typesafe_review.questions import (
     CATALOG,
@@ -252,10 +251,6 @@ def _validate_labels(
                 raise CalibrateError(f'{case_dir}: labels.json has unknown question id {question_id!r} for key {key!r}')
 
 
-def _resolve_model() -> str:
-    return os.environ.get(typesafe_constants.DEFAULT_MODEL_ENV, typesafe_constants.DEFAULT_MODEL)
-
-
 def _build_requests(
     hunks: list[Hunk], hunk_states: list[HunkState], change_state: ChangeState, task: Task | None
 ) -> list[RequestItem]:
@@ -286,7 +281,7 @@ def record_one_case(case_dir: Path, model: str | None = None) -> AskResult:
     slice it, build the exact request set `calibrate` would replay, and record real
     responses into `case_dir/responses/`. Never called by `calibrate`/`run` -- this is
     the entry point `fixtures/README.md`'s recording instructions call directly."""
-    resolved_model = model or _resolve_model()
+    resolved_model = model or pipeline.resolve_model()
     task = load_case_task(case_dir)
     with tempfile.TemporaryDirectory() as tmp:
         built = build_two_stage_repo(Path(tmp), case_dir / 'before', case_dir / 'after')
@@ -335,7 +330,7 @@ def calibrate(fixtures_dir: Path) -> list[QuestionRow]:
     except OSError as e:
         raise CalibrateError(f'{fixtures_dir}: cannot list fixture cases ({e})') from e
 
-    model = _resolve_model()
+    model = pipeline.resolve_model()
     #: Every question definition seen: the static catalog plus, per case with a
     #: `task.md`, that case's dynamic `criterion_*` ids -- accumulated as cases are
     #: walked so `build_row` always has the `Question` (severity/threshold/direction)

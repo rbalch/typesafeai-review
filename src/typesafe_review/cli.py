@@ -14,16 +14,22 @@ prints a raw traceback.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+from typesafe_sdk import Noul
+from typesafe_sdk import constants as typesafe_constants
+
 from typesafe_review import pipeline
-from typesafe_review.ask import AskFailed
+from typesafe_review.ask import AskFailed, RequestItem, ask_all
 from typesafe_review.calibrate import run as run_calibrate
 from typesafe_review.checks import CheckError
 from typesafe_review.compose import ComposeInvariantError
+from typesafe_review.env import EnvError, load_env
 from typesafe_review.render import RenderError
 from typesafe_review.slicing import SlicingError, slice_diff
 from typesafe_review.state import (
@@ -68,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--record', type=Path, default=None, help='record API responses to this directory')
     parser.add_argument('--replay', type=Path, default=None, help='replay recorded API responses from this directory')
     parser.add_argument('--calibrate', type=Path, default=None, help='run calibration against a labelled fixtures dir')
+    parser.add_argument(
+        '--env-file', dest='env_file', type=Path, default=None, help='load TYPESAFE_* keys from this file first'
+    )
+    parser.add_argument(
+        '--doctor', action='store_true', help='prove the key, base URL and model work with one live call'
+    )
     return parser
 
 
@@ -150,9 +162,87 @@ def _dump_state(worktree: Path, base: str, task_path: Path | None, red_sha: str 
     return EXIT_APPROVE
 
 
+#: The exact state/questions `--doctor` sends: a `check` field that must equal
+#: `"ping"`, so a passing answer means the model actually looked at the state rather
+#: than defaulting to yes. Public (not `_`-prefixed) so a test can rebuild the same
+#: `ask.request_key` a `--record` pass would have used, to plant a forged low-noul
+#: replay fixture (RA-01 fix round 1).
+DOCTOR_STATE: dict[str, str] = {'check': 'ping'}
+DOCTOR_QUESTIONS: dict[str, Noul] = {
+    'check': Noul(
+        instructions='Does `check` equal the string "ping"?',
+        criteria={'true': '`check` is exactly the string "ping"', 'false': '`check` is anything else'},
+    )
+}
+DOCTOR_NOUL_THRESHOLD = 0.5
+
+
+def _doctor(args: argparse.Namespace, trace: list[str]) -> int:
+    """`--doctor`: print the resolved model, base URL and whether the key is
+    present, send one `Noul` (`DOCTOR_QUESTIONS`) through the same `Recorder` path
+    the pipeline uses (so `--replay` works in a test), and verify the answer --
+    print `ok` only once the `check` question actually came back a `Noul` answer
+    with `noul >= DOCTOR_NOUL_THRESHOLD` (a forged or missing answer must not print
+    `ok`: "fail closed... a path that reports success it did not verify is a
+    blocker," AGENTS.md). Any SDK error, missing key, or an answer below threshold
+    prints its cause plus `trace` -- every search location `load_env` visited, in
+    order -- and exits 1 (RA-01 item 4)."""
+    model = pipeline.resolve_model()
+    base_url = os.environ.get(typesafe_constants.BASE_URL_ENV, typesafe_constants.DEFAULT_BASE_URL)
+    key_present = bool(os.environ.get(typesafe_constants.API_KEY_ENV))
+
+    print(f'model: {model}', file=sys.stderr)
+    print(f'base url: {base_url}', file=sys.stderr)
+    print(f'key: {"present" if key_present else "missing"}', file=sys.stderr)
+
+    if not key_present:
+        print(f'doctor: {typesafe_constants.API_KEY_ENV} is not set', file=sys.stderr)
+        for line in trace:
+            print(line, file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    request: RequestItem = ('doctor', DOCTOR_STATE, DOCTOR_QUESTIONS)
+    recorder = pipeline.resolve_recorder(args)
+    try:
+        result = asyncio.run(ask_all([request], model=model, recorder=recorder))
+    except AskFailed as error:
+        print(f'doctor: {error}', file=sys.stderr)
+        for line in trace:
+            print(line, file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    answer = result.answers['doctor'].nouls.get('check')
+    noul = answer.noul if answer is not None else None
+
+    if noul is None or noul < DOCTOR_NOUL_THRESHOLD:
+        shown = 'missing' if noul is None else f'{noul}'
+        print(f'doctor: check question answered {shown}, expected >= {DOCTOR_NOUL_THRESHOLD}', file=sys.stderr)
+        for line in trace:
+            print(line, file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    print(f'noul: {noul}', file=sys.stderr)
+    print('ok')
+    return EXIT_APPROVE
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    trace: list[str] = []
+    try:
+        contributing = load_env(args.worktree, args.env_file, trace=trace)
+    except EnvError as error:
+        print(str(error), file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+    for path in contributing:
+        print(f'env: {path}', file=sys.stderr)
+
+    if args.doctor:
+        # `--doctor` never needs `--worktree`, just like `--calibrate` below: it
+        # proves the API credentials work, it does not review anything.
+        return _doctor(args, trace)
 
     if args.calibrate is not None:
         # `--calibrate` never needs `--worktree`: it replays a labelled fixtures

@@ -55,16 +55,18 @@ produce for that case, before it ever needs `responses/` to exist.
 
 ## Recording `responses/`
 
-Recording is a one-off live pass, per case, offline after that. From the root
-checkout (not a worktree -- the key lives in its `.env`, which is not copied into a
-worktree):
+Recording is a one-off live pass, per case, offline after that. `env.load_env`
+(RA-01) finds the key on its own -- from the root checkout, from a nested worktree
+(it walks `cwd` up to the filesystem root), or from `~/.config/typesafe-review/env`;
+`uv run ts-review --doctor` proves which file it found. No more manually sourcing
+`.env`:
 
 ```bash
-set -a; source <repo root>/.env; set +a
-export TYPESAFE_BASE_URL="${TYPESAFE_BASE_URL%/v1/systemone}"
 uv run python -c "
 from pathlib import Path
+from typesafe_review.env import load_env
 from typesafe_review.calibrate import record_one_case
+load_env(None, None)
 record_one_case(Path('fixtures/<case>'))
 "
 ```
