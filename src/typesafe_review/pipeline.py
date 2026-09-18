@@ -75,11 +75,16 @@ def _clean_stale_outputs(worktree: Path) -> None:
             candidate.unlink()
 
 
-def _resolve_model() -> str:
+def resolve_model() -> str:
+    """The model to ask: `TYPESAFE_DEFAULT_MODEL`, or the SDK's own default. Public
+    because `cli.py`'s `--doctor` (RA-01) reports the same resolution a real run
+    would make, before it ever sends a request."""
     return os.environ.get(typesafe_constants.DEFAULT_MODEL_ENV, typesafe_constants.DEFAULT_MODEL)
 
 
-def _resolve_recorder(args: argparse.Namespace) -> Recorder:
+def resolve_recorder(args: argparse.Namespace) -> Recorder:
+    """`--replay`/`--record`/live, from the same two flags `--doctor` (RA-01) also
+    accepts, so one call site decides "where do responses come from" for both."""
     if args.replay is not None:
         return Replay(args.replay)
     if args.record is not None:
@@ -158,8 +163,8 @@ def run(args: argparse.Namespace, worktree: Path, base: str) -> int:
 
     _log('ask…')
     requests = _build_requests(task, hunk_states, change_state)
-    model = _resolve_model()
-    recorder = _resolve_recorder(args)
+    model = resolve_model()
+    recorder = resolve_recorder(args)
     ask_result: AskResult = asyncio.run(ask_all(requests, model=model, recorder=recorder))
 
     hunk_answers = [(hunk_states[i], ask_result.answers[_hunk_request_key(i)]) for i in range(len(hunk_states))]

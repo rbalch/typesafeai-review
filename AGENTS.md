@@ -97,8 +97,12 @@ ledger.
 - Send every question for one state in one request; they run in parallel.
 - No documented cap on state size or question count. Measure `usage.input_tokens`.
 - SDK env: `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`
-  (default `jev-latest`), `TYPESAFE_LOG_LEVEL`. The repo `.env` sets them. Never print
-  the key.
+  (default `jev-latest`), `TYPESAFE_LOG_LEVEL`. `TYPESAFE_BASE_URL` is
+  `https://api.typesafe.ai` — the SDK appends `/v1/systemone` itself; `env.py` strips
+  that suffix if a file carries the full endpoint (ledger H-4). The repo `.env` sets
+  them; `env.load_env` also finds `--env-file`, `<worktree>/.env`, and
+  `~/.config/typesafe-review/env` (`uv run ts-review --doctor` proves which one it
+  found). Never print the key.
 
 ## Always
 
