@@ -114,3 +114,29 @@ def test_no_plan_arg_means_every_plan(tmp_path: Path) -> None:
     write_task(tmp_path / 'tasks' / 'beta', 'B-01')
     (tmp_path / 'tasks' / 'README.md').write_text('# tasks')
     assert [p.name for p in ts.plan_dirs(tmp_path / 'tasks')] == ['alpha', 'beta']
+
+
+def test_lettered_suffix_id_loads_and_derives_status(tmp_path: Path) -> None:
+    plan = tmp_path / 'tasks' / 'p'
+    write_task(plan, 'RA-02')
+    write_task(plan, 'RA-02b', '---\nid: RA-02b\ntitle: fence\ndepends_on: [RA-02]\n---\n')
+    tasks = ts.load_plan(plan, tasks_root=tmp_path / 'tasks')
+    ids = [t.id for t in tasks]
+    assert ids == ['RA-02', 'RA-02b']
+    prs = {'RA-02': {'state': 'MERGED'}}
+    assert ts.derive_status(tasks, prs) == {'RA-02': 'done', 'RA-02b': 'ready'}
+
+
+def test_pr_title_maps_lettered_id_without_colliding_with_parent(tmp_path: Path) -> None:
+    m1 = ts.PR_TITLE.match('RA-02: parent task')
+    m2 = ts.PR_TITLE.match('RA-02b: follow-up task')
+    assert m1 is not None and m1.group(1) == 'RA-02'
+    assert m2 is not None and m2.group(1) == 'RA-02b'
+
+
+@pytest.mark.parametrize('bad_id', ['RA-2bb', 'RA-02B', 'ra-02b'])
+def test_id_suffix_rejects_malformed_variants(tmp_path: Path, bad_id: str) -> None:
+    plan = tmp_path / 'tasks' / 'p'
+    write_task(plan, 'T-01', f'---\nid: {bad_id}\ntitle: x\ndepends_on: []\n---\n')
+    with pytest.raises(SystemExit, match='must look like'):
+        ts.load_plan(plan, tasks_root=tmp_path / 'tasks')

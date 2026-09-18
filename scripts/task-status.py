@@ -8,9 +8,11 @@ done, and ``ready`` otherwise. Usage::
     make tasks PLAN=tasks/<plan-slug>   # one plan
     make tasks                          # every plan under tasks/
 
-Task ids are ``<PREFIX>-NN``. Each plan owns one uppercase prefix (``T``, ``CT``,
-...) and no two plans share one, because a PR title carries the id alone and
-nothing else says which plan it belongs to. See tasks/README.md.
+Task ids are ``<PREFIX>-NN``, optionally followed by a single lowercase letter
+(``T-01`` or ``T-01b``) so a follow-up task can slot in after an existing one
+without renumbering. Each plan owns one uppercase prefix (``T``, ``CT``, ...) and
+no two plans share one, because a PR title carries the id alone and nothing else
+says which plan it belongs to. See tasks/README.md.
 """
 
 from __future__ import annotations
@@ -23,8 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 FRONT = re.compile(r'^---\n(.*?)\n---', re.DOTALL)
-ID = re.compile(r'^([A-Z]+)-(\d+)$')
-PR_TITLE = re.compile(r'([A-Z]+-\d+):')
+ID = re.compile(r'^([A-Z]+)-(\d+[a-z]?)$')
+PR_TITLE = re.compile(r'([A-Z]+-\d+[a-z]?):')
 REQUIRED = ('id', 'title', 'depends_on')
 ICON = {'done': '✅', 'in_review': '👀', 'ready': '🟢', 'blocked': '⛔'}
 
@@ -82,7 +84,7 @@ def load_plan(plan: Path, tasks_root: Path = Path('tasks')) -> list[Task]:
         raise SystemExit(f'{plan}: not a plan directory. Plans found: {known}')
     files = task_files(plan)
     if not files:
-        raise SystemExit(f'{plan}: no task files (expected <PREFIX>-NN-<slug>.md)')
+        raise SystemExit(f'{plan}: no task files (expected <PREFIX>-NN[a-z]?-<slug>.md)')
 
     tasks: list[Task] = []
     for path in files:
@@ -91,7 +93,7 @@ def load_plan(plan: Path, tasks_root: Path = Path('tasks')) -> list[Task]:
         if missing:
             raise SystemExit(f'{path}: frontmatter is missing {", ".join(missing)}')
         if not ID.match(fm['id']):
-            raise SystemExit(f'{path}: id {fm["id"]!r} must look like T-01 (<PREFIX>-NN)')
+            raise SystemExit(f'{path}: id {fm["id"]!r} must look like T-01 or T-01b (<PREFIX>-NN[a-z]?)')
         tasks.append(Task(id=fm['id'], title=fm['title'], depends_on=parse_list(fm['depends_on'])))
 
     prefixes = {t.prefix for t in tasks}
