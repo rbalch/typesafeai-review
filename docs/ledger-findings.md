@@ -275,6 +275,30 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Bin:** 3
 - **Claim:** `cli._doctor` catches `AskFailed` only; an unexpected exception is a raw traceback where the pipeline path prints one line. Boundary reviewer called it acceptable for a diagnostic. Taste; logged, no action.
 
+### F-19 — sighting 2 (2026-09-18, RA-02)
+- `cli._resolve_task_and_red_sha` guarded a PR-supplied red sha with `git cat-file -e` and labelled the task source `pr`; deleting the guard or hardcoding `'file'` survived all 17 tests. Both were scope items. Fixed with two end-to-end tests that kill each mutation. Same shape as F-19 sighting 1: the guard the task asked for exists, nothing reaches it.
+
+### F-26 — Two producers of one value differ by whitespace; a content hash forks by source
+- **Date:** 2026-09-18 (RA-02)
+- **Bin:** 2
+- **Claim:** a value that feeds a content-addressed key (`ask.request_key`) is built by two code paths (`load_task` from a file, `extract_brief` from a PR body) that differ only in outer blank lines, so identical briefs hash differently and recorded responses replay for one source only.
+- **Sightings:** 1
+- **Action:** soft. Builder found it while writing the PR-path test and first worked around it with a copied fixture under a recomputed key; sent back, fixed in `parse_task` (normalise outer blank lines, existing keys unchanged). Checkable in principle: a dataclass field that reaches `request_key` with more than one constructor path and no normalising step.
+
+### F-8 — sighting 2 (2026-09-18, RA-02)
+- `checks.redact` (`(token|secret|key)\s*[=:]\s*\S+`) misses a bare `ghp_…` value, which is how `gh`'s bad-credentials message actually reads. Found when `fetch_pr` started folding `gh` stderr into `PRSourceError`. Not fixed this task (pre-existing regex); second sighting of "the redaction pattern is the task's literal and misses the real shape".
+
+### F-13 — sighting 2 (2026-09-18, RA-02)
+- `fetch_pr` surfaced the raw `gh` stderr tail in its error with no test that the surface omits a token; boundary reviewer planted one and it printed. Fixed: tail passes through `checks.redact` (made public), test asserts `<redacted>` and not the token.
+
+### H-5 — sighting 2 (2026-09-18, RA-02)
+- Builder reported the trailing-newline hash fork as a "wrinkle" in its return instead of burying the workaround. The disclosure is what turned a test hack into F-26.
+
+### F-27 — Hand-computed content hash literal in a test
+- **Date:** 2026-09-18 (RA-02)
+- **Bin:** 3
+- **Claim:** `test_pr_red_sha_that_does_not_exist…` places a copied response under a sha256 literal computed offline; the reviewer judged it legitimate plumbing (the key is not what the test asserts) but a maintenance cost. Taste; logged.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
