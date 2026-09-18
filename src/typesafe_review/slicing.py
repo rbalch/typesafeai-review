@@ -1,4 +1,6 @@
-"""Slice `base..HEAD` into per-hunk state and change-wide summaries.
+"""Slice `base...HEAD` into per-hunk state and change-wide summaries.
+
+The range is three-dot: merge-base(base, HEAD) vs HEAD, never base tip vs HEAD.
 
 Pure code, no model. See spec sections 4.2, 4.3, 4.4. `slice_diff` is the entry
 point; everything else is a helper for it.
@@ -397,7 +399,10 @@ def _split_diff(full_diff: str, is_test_by_path: dict[str, bool]) -> tuple[str, 
 
 
 def slice_diff(worktree: Path, base: str) -> Change:
-    """Slice `git diff base..HEAD` in `worktree` into hunks and summaries.
+    """Slice `git diff base...HEAD` in `worktree` into hunks and summaries.
+
+    Three dots: merge-base(base, HEAD) vs HEAD, so a `base` that moved past the
+    fork point does not leak its own changes, reversed, into the review.
 
     Raises `SlicingError` if any git subprocess this needs fails; never returns
     an empty `Change` to paper over a failure.
@@ -408,7 +413,7 @@ def slice_diff(worktree: Path, base: str) -> Change:
         attrs_path = Path(attrs_file.name)
 
     try:
-        numstat_out = _decode(_run_git(worktree, attrs_path, ['diff', '--no-renames', '--numstat', f'{base}..HEAD']))
+        numstat_out = _decode(_run_git(worktree, attrs_path, ['diff', '--no-renames', '--numstat', f'{base}...HEAD']))
         summary = _parse_numstat(numstat_out)
 
         if not summary:
@@ -418,7 +423,7 @@ def slice_diff(worktree: Path, base: str) -> Change:
         binary_paths = {s.path for s in summary if s.binary}
         added_by_path = {s.path: s.added for s in summary}
 
-        unified_out = _decode(_run_git(worktree, attrs_path, ['diff', '--no-renames', '--unified=0', f'{base}..HEAD']))
+        unified_out = _decode(_run_git(worktree, attrs_path, ['diff', '--no-renames', '--unified=0', f'{base}...HEAD']))
         blocks = _split_file_blocks(unified_out)
 
         file_content_cache: dict[str, str | None] = {}
@@ -444,7 +449,7 @@ def slice_diff(worktree: Path, base: str) -> Change:
 
             hunks.extend(_parse_hunks_for_block(block, path, is_new, is_test, file_content, helpers, touching_tests))
 
-        full_diff = _decode(_run_git(worktree, attrs_path, ['diff', '--no-renames', f'{base}..HEAD']))
+        full_diff = _decode(_run_git(worktree, attrs_path, ['diff', '--no-renames', f'{base}...HEAD']))
         src_diff, test_diff = _split_diff(full_diff, is_test_by_path)
 
         return Change(hunks=hunks, summary=summary, src_diff=src_diff, test_diff=test_diff)

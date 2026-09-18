@@ -308,3 +308,28 @@ def test_nonexistent_base_ref_raises_slicing_error(tmp_path):
 
     with pytest.raises(SlicingError):
         slice_diff(repo, 'this-ref-does-not-exist')
+
+
+def test_base_moved_past_fork_point_yields_only_feature_hunks(tmp_path):
+    """`develop` gaining a commit after the feature branch forked must not leak
+    develop's changes (reversed) into the sliced change. Diff against the
+    merge-base, not develop's tip."""
+    repo = make_repo(tmp_path)
+    write(repo, 'shared.py', 'shared = 0\n')
+    write(repo, 'feature.py', 'feature = 0\n')
+    commit(repo, 'root')
+    _git(repo, 'branch', 'develop')
+
+    _git(repo, 'checkout', '-q', '-b', 'feature')
+    write(repo, 'feature.py', 'feature = 1\n')
+    commit(repo, 'feature edit')
+
+    _git(repo, 'checkout', '-q', 'develop')
+    write(repo, 'shared.py', 'shared = 1\n')
+    commit(repo, 'develop moves on')
+    _git(repo, 'checkout', '-q', 'feature')
+
+    change = slice_diff(repo, 'develop')
+    assert {s.path for s in change.summary} == {'feature.py'}
+    assert {h.path for h in change.hunks} == {'feature.py'}
+    assert 'shared' not in change.src_diff

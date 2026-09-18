@@ -136,7 +136,7 @@ def _collect_notes(change: Change, conventions: str) -> list[str]:
 
 
 def run(args: argparse.Namespace, worktree: Path, base: str) -> int:
-    """Steps 0-7 against `worktree`, diffing `base..HEAD`. Returns the exit code for
+    """Steps 0-7 against `worktree`, diffing `base...HEAD`. Returns the exit code for
     `review.verdict` (spec §3: 0 APPROVE, 2 CHANGES_REQUESTED, 3 NEEDS_HUMAN)."""
     _clean_stale_outputs(worktree)
 
