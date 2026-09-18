@@ -220,6 +220,28 @@ def test_redact_still_strips_token_shaped_text() -> None:
     assert 'abc123' not in redact('token=abc123')
 
 
+def test_redact_strips_authorization_bearer_header() -> None:
+    # DEC-3 / F-8 sighting 1: a bearer token carries no "token=" label of its own.
+    assert 'sekrit.jwt-ish' not in redact('Authorization: Bearer sekrit.jwt-ish')
+
+
+def test_redact_strips_bare_well_known_credential_prefixes() -> None:
+    # DEC-3 / F-8 sighting 2: `gh`'s own "Bad credentials" message has no label.
+    assert 'ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ' not in redact(
+        'Bad credentials: ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ'
+    )
+    assert 'AKIAIOSFODNN7EXAMPLE' not in redact('aws_access_key_id AKIAIOSFODNN7EXAMPLE')
+
+
+def test_redact_strips_pem_header() -> None:
+    assert redact('-----BEGIN RSA PRIVATE KEY-----') == '<redacted>'
+
+
+def test_redact_leaves_keys_dot_json_alone() -> None:
+    # DEC-3 must-keep: a filename merely containing "key" is not a credential.
+    assert redact('keys.json') == 'keys.json'
+
+
 def test_temp_checkout_is_removed_even_when_pytest_fails(tmp_path: Path) -> None:
     repo = tmp_path / 'repo'
     _init_repo(repo)
