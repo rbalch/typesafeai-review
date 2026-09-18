@@ -4,6 +4,10 @@
   "summary": "No blocking issues found; ready to merge.",
   "worktree": "/app/.claude/worktrees/T-09-render",
   "base": "develop",
+  "context": {
+    "task_source": "file",
+    "red_sha_source": "flag"
+  },
   "required_checks": [
     {
       "name": "red proof",

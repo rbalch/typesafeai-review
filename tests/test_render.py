@@ -216,7 +216,7 @@ def _engine() -> AskResult:
 @pytest.mark.parametrize('name', sorted(SCENARIOS))
 def test_render_markdown_matches_golden(name: str) -> None:
     review = SCENARIOS[name]()
-    actual = render_markdown(review)
+    actual = render_markdown(review, 'file', 'flag')
     expected = (FIXTURES / f'{name}.md').read_text()
     assert actual == expected
 
@@ -227,9 +227,15 @@ def test_written_outputs_match_golden_byte_for_byte(name: str, tmp_path: Path) -
     match the hand-authored golden files exactly, markdown and JSON alike.
     """
     review = SCENARIOS[name]()
-    md = render_markdown(review)
+    md = render_markdown(review, 'file', 'flag')
     json_obj = render_json(
-        review, _engine(), Path('/app/.claude/worktrees/T-09-render'), 'develop', ['note one', 'note two']
+        review,
+        _engine(),
+        Path('/app/.claude/worktrees/T-09-render'),
+        'develop',
+        ['note one', 'note two'],
+        'file',
+        'flag',
     )
     write_outputs(tmp_path, md, json_obj)
 
@@ -241,7 +247,7 @@ def test_written_outputs_match_golden_byte_for_byte(name: str, tmp_path: Path) -
 def test_render_json_round_trips_through_json_loads(name: str) -> None:
     review = SCENARIOS[name]()
     engine = AskResult(answers={}, requests=1, input_tokens=100, model='jev-latest')
-    actual = render_json(review, engine, Path('/tmp/wt'), 'develop', [])
+    actual = render_json(review, engine, Path('/tmp/wt'), 'develop', [], 'file', 'flag')
     round_tripped = json.loads(json.dumps(actual))
     assert round_tripped == actual
 
@@ -255,6 +261,7 @@ def test_golden_json_files_are_valid_json_with_expected_top_level_keys() -> None
             'summary',
             'worktree',
             'base',
+            'context',
             'required_checks',
             'findings',
             'uncertain',
@@ -272,8 +279,8 @@ def test_golden_json_files_are_valid_json_with_expected_top_level_keys() -> None
 def _write_inputs(tmp_path: Path) -> tuple[str, dict]:
     review = _approve_review()
     engine = AskResult(answers={}, requests=1, input_tokens=10, model='jev-latest')
-    md = render_markdown(review)
-    json_obj = render_json(review, engine, tmp_path, 'develop', [])
+    md = render_markdown(review, 'file', 'flag')
+    json_obj = render_json(review, engine, tmp_path, 'develop', [], 'file', 'flag')
     return md, json_obj
 
 
@@ -381,7 +388,7 @@ def test_render_markdown_escapes_pipe_and_flattens_newline_in_check_notes() -> N
         required_checks=[CheckResult(name='make check', status='fail', notes='line one|with pipe\nline two')],
     )
 
-    md = render_markdown(review)
+    md = render_markdown(review, 'file', 'flag')
 
     rows = [line for line in md.splitlines() if line.startswith('| make check')]
     assert len(rows) == 1

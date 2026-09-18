@@ -30,6 +30,7 @@ from typesafe_review.calibrate import run as run_calibrate
 from typesafe_review.checks import CheckError
 from typesafe_review.compose import ComposeInvariantError
 from typesafe_review.env import EnvError, load_env
+from typesafe_review.prsource import PRSourceError, extract_brief, extract_red_sha, fetch_pr, parse_pr_ref
 from typesafe_review.render import RenderError
 from typesafe_review.slicing import SlicingError, slice_diff
 from typesafe_review.state import (
@@ -39,7 +40,7 @@ from typesafe_review.state import (
     load_acceptance_tests,
     load_conventions,
 )
-from typesafe_review.taskfile import TaskFileError, load_task
+from typesafe_review.taskfile import Task, TaskFileError, load_task, parse_task
 from typesafe_review.verdict import EXIT_APPROVE, EXIT_TOOL_FAILURE
 
 BASE_CANDIDATES = ('develop', 'main', 'master')
@@ -63,7 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         description='AI-powered code review: deterministic checks + Jev per-hunk questions.',
     )
     parser.add_argument('--worktree', type=Path, default=None, help='path to the builder worktree to review')
-    parser.add_argument('--task', type=Path, default=None, help='planner task file for this change')
+    parser.add_argument(
+        '--task',
+        default=None,
+        help='planner task file for this change, or a PR number/#number/URL to pull the brief from (RA-02)',
+    )
     parser.add_argument('--red-sha', dest='red_sha', default=None, help='commit SHA of the failing acceptance tests')
     parser.add_argument(
         '--base',
@@ -114,15 +119,18 @@ def _resolve_base(worktree: Path, base: str | None) -> str | None:
     return None
 
 
-def _dump_state(worktree: Path, base: str, task_path: Path | None, red_sha: str | None, dump_dir: Path) -> int:
+def _dump_state(worktree: Path, base: str, task_arg: str | None, red_sha: str | None, dump_dir: Path) -> int:
     """`--dump-state`: slice, build every state shape, write it to `dump_dir` as JSON,
     print a token estimate per file to stderr, and exit — no API call, nothing written
     in `worktree`.
+
+    `--dump-state` only ever reads `task_arg` as a file path (RA-02's PR source is out
+    of scope here: this mode inspects state shapes offline, it never calls `gh`).
     """
     task = None
-    if task_path is not None:
+    if task_arg is not None:
         try:
-            task = load_task(task_path)
+            task = load_task(Path(task_arg))
         except TaskFileError as e:
             print(str(e), file=sys.stderr)
             return EXIT_TOOL_FAILURE
@@ -226,6 +234,56 @@ def _doctor(args: argparse.Namespace, trace: list[str]) -> int:
     return EXIT_APPROVE
 
 
+def _confirmed_commit_exists(worktree: Path, sha: str) -> bool:
+    result = subprocess.run(
+        ['git', '-C', str(worktree), 'cat-file', '-e', f'{sha}^{{commit}}'],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _resolve_task_and_red_sha(
+    worktree: Path, task_arg: str | None, red_sha_arg: str | None
+) -> tuple[Task | None, str, str | None, str]:
+    """`(task, task_source, red_sha, red_sha_source)` for `pipeline.run` (RA-02).
+
+    `task_arg` a PR ref -> fetch the PR, parse its brief, and (absent `--red-sha`)
+    take a red-sha out of the body if `git cat-file` confirms the commit exists in
+    `worktree`. `task_arg` anything else -> a file path, exactly as before RA-02.
+    Raises `PRSourceError` / `TaskFileError` for the caller to turn into a stderr
+    line and exit 1; never guesses past those.
+    """
+    red_sha = red_sha_arg
+    red_sha_source = 'flag' if red_sha_arg is not None else 'none'
+
+    if task_arg is None:
+        return None, 'none', red_sha, red_sha_source
+
+    pr_number = parse_pr_ref(task_arg)
+    if pr_number is None:
+        task = load_task(Path(task_arg))
+        return task, 'file', red_sha, red_sha_source
+
+    pr = fetch_pr(pr_number, worktree)
+    brief = extract_brief(pr.body)
+    task = parse_task(brief, f'PR #{pr_number}')
+
+    if red_sha is None:
+        candidate = extract_red_sha(pr.body)
+        if candidate is not None:
+            if _confirmed_commit_exists(worktree, candidate):
+                red_sha = candidate
+                red_sha_source = 'pr'
+            else:
+                print(
+                    f'red sha {candidate} from PR #{pr_number} body not found in {worktree}; continuing without one',
+                    file=sys.stderr,
+                )
+
+    return task, 'pr', red_sha, red_sha_source
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -275,7 +333,13 @@ def main(argv: list[str] | None = None) -> int:
         return _dump_state(worktree, base, args.task, args.red_sha, args.dump_state)
 
     try:
-        return pipeline.run(args, worktree, base)
+        task, task_source, red_sha, red_sha_source = _resolve_task_and_red_sha(worktree, args.task, args.red_sha)
+    except (TaskFileError, PRSourceError) as error:
+        print(str(error), file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    try:
+        return pipeline.run(args, worktree, base, task, red_sha, task_source, red_sha_source)
     except _PIPELINE_ERRORS as error:
         print(str(error), file=sys.stderr)
         return EXIT_TOOL_FAILURE

@@ -10,6 +10,9 @@ score, severity and findings -- nothing here re-derives any of that.
 ```
 # Code Review
 
+- Task source: <task_source>
+- Red-sha source: <red_sha_source>
+
 ## Verdict
 
 - Verdict: <verdict>
@@ -112,9 +115,12 @@ def _table_cell(text: str) -> str:
     return text.replace('|', '\\|').replace('\n', ' ')
 
 
-def render_markdown(review: Review) -> str:
+def render_markdown(review: Review, task_source: str, red_sha_source: str) -> str:
     lines: list[str] = [
         '# Code Review',
+        '',
+        f'- Task source: {task_source}',
+        f'- Red-sha source: {red_sha_source}',
         '',
         '## Verdict',
         '',
@@ -182,6 +188,8 @@ def render_json(
     worktree: Path,
     base: str,
     notes: list[str],
+    task_source: str,
+    red_sha_source: str,
 ) -> dict[str, Any]:
     return {
         'verdict': review.verdict.value,
@@ -189,6 +197,7 @@ def render_json(
         'summary': review.summary,
         'worktree': str(worktree),
         'base': base,
+        'context': {'task_source': task_source, 'red_sha_source': red_sha_source},
         'required_checks': [
             {'name': check.name, 'result': check.status, 'notes': check.notes} for check in review.required_checks
         ],
