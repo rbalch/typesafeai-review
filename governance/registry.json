@@ -1,6 +1,14 @@
 {
   "controls": [
     {
+      "decision": "DEC-2",
+      "enforcement": "block",
+      "path": "controls/fitness/duplicate_helper.py",
+      "pragma": "supported",
+      "sha256": null,
+      "type": "fitness_fn"
+    },
+    {
       "decision": "DEC-1",
       "enforcement": "block",
       "path": "controls/fitness/io_error_wrapping.py",
@@ -31,6 +39,13 @@
       "status": "accepted",
       "superseded_by": null,
       "title": "A module's own error type must not be leaked past by a raw I/O call"
+    },
+    {
+      "id": "DEC-2",
+      "kind": "negative",
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "A helper duplicated verbatim across modules must be shared, not copied"
     }
   ]
 }
