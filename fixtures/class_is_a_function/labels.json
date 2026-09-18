@@ -1,0 +1,9 @@
+{
+  "pkg.py@@@ -2,0 +3,8 @@ def helper() -> int:": {
+    "class_is_a_function": true,
+    "init_only_assigns": true
+  },
+  "<change>": {
+    "new_behaviour_untested": true
+  }
+}

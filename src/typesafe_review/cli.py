@@ -1,9 +1,8 @@
 """`ts-review` entry point.
 
 Parses every flag from spec §3, resolves the base ref, and either serves `--dump-state`
-(T-01) or hands off to `pipeline.run` (T-10) for the real steps 0-7. `--calibrate` is
-still `T-11`, named in its own "not implemented" message so the CLI never claims work
-it has not done.
+(T-01), `--calibrate` (T-11, `calibrate.run`), or hands off to `pipeline.run` (T-10)
+for the real steps 0-7.
 
 `main` is the one place every module's own exception type -- and a bare
 `subprocess.SubprocessError` (an unwrapped git call) or `OSError` (unwrapped file I/O,
@@ -22,6 +21,7 @@ from pathlib import Path
 
 from typesafe_review import pipeline
 from typesafe_review.ask import AskFailed
+from typesafe_review.calibrate import run as run_calibrate
 from typesafe_review.checks import CheckError
 from typesafe_review.compose import ComposeInvariantError
 from typesafe_review.render import RenderError
@@ -155,8 +155,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.calibrate is not None:
-        print('not implemented (T-11)', file=sys.stderr)
-        return EXIT_TOOL_FAILURE
+        # `--calibrate` never needs `--worktree`: it replays a labelled fixtures
+        # directory, not the worktree under review (T-01 already waives the
+        # requirement for this flag).
+        return run_calibrate(args.calibrate)
 
     if args.worktree is None:
         parser.error('the following arguments are required: --worktree')

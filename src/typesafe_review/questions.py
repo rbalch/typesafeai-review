@@ -850,3 +850,26 @@ def questions_for(scope: Scope, language: str | None = None, is_test: bool = Fal
         scopes.add('hunk_python')
 
     return {q.id: q for q in CATALOG if q.scope in scopes}
+
+
+def expected_hunk_questions(language: str, is_test: bool) -> dict[str, Question]:
+    """Every question the catalog says should be asked about one hunk, given its
+    `language`/`is_test` -- a thin, named wrapper over `questions_for('hunk', ...)`.
+
+    The one function `pipeline.py` (what to send), `compose.py` (what to expect an
+    answer for), and `calibrate.py` (what to replay against) all call, so the three
+    can never drift into hand-maintained copies of the same selection (ledger
+    F-15/F-16).
+    """
+    return questions_for('hunk', language=language, is_test=is_test)
+
+
+def expected_change_questions(task: Task | None) -> dict[str, Question]:
+    """Every question the catalog says should be asked change-wide, plus `task`'s own
+    `criterion_*` ids if a task is given. Same reuse rationale as
+    `expected_hunk_questions`.
+    """
+    expected = dict(questions_for('change'))
+    if task is not None:
+        expected.update(criterion_questions(task))
+    return expected
