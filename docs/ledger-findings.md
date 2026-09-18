@@ -330,6 +330,28 @@ and forcing a harness observation into one loses what makes it interesting.
 ### H-5 — sighting 3 (2026-09-18, RA-03)
 - Builder disclosed the post-red test fixup, the `ask_all` stub, and that its first call-count test passed vacuously (fake sha failed target resolution before the second fetch). All three surfaced in the return.
 
+### F-13 — sighting 3 (2026-09-18, RA-04)
+- `meta.json` wrote `git remote get-url origin` raw; an origin `https://user:ghp_…@github.com/…` landed verbatim in a file RA-05 commits under `fixtures/real/`. The redaction test covered `state/` only; nothing asserted `meta.json`. Boundary reviewer proved it by execution. Fixed: userinfo stripped in `pipeline._repo_identity`, `meta` passes through `redact`, test with a synthetic credentialed origin. **Third sighting.** Claim restated: a new file or message surface built from external input ships without a test that plants a secret and asserts its absence. Candidate for `control-author`; like F-10 the detector is a test-shape rule, so the orchestrator wants a human's view before dispatch: a control would have to find a `src/` write/format site fed by subprocess or remote output and demand a test that imports `redact` or plants a secret.
+
+### F-8 — sighting 3 (2026-09-18, RA-04)
+- `checks.redact` did not match `://user:pass@` (round 1), then the added pattern matched a bare `ssh://git@host` username and rewrote a correct origin (round 2). Two directions of the same defect: the regex is written to the shape in front of it, not to a corpus. **Third sighting → `control-author` dispatched 2026-09-18.** Proposed control: a fitness test with a fixed corpus of secret-shaped strings that must be scrubbed and benign strings (`ssh://git@host`, `key_name = 'x'`) that must survive, so the redactor is measured, not eyeballed.
+
+### F-16 — sighting 3 (2026-09-18, RA-04)
+- `calibrate.py` copied `ask.py`'s `SystemOneResponse.from_http_response(httpx2.Response(…))` without its `except`; `_send_questions` existed verbatim in `pipeline.py`, `case.py` and `calibrate.py`; `CHANGE_KEY` was re-declared in `case.py` to dodge an import cycle. Fixed: `ask.response_from_bytes`, `questions.send_questions`, `questions.CHANGE_KEY`. **Third sighting → `control-author` dispatched 2026-09-18.** Proposed control: two functions under `src/` with the same name and an identical AST body (ignoring docstrings) fail the build.
+
+### F-3 — sighting 6 (2026-09-18, RA-04)
+- `calibrate._load_state_case_answers` caught `ReplayMiss` only; `Replay.load_by_key` (a method, outside DEC-1's scope) let `PermissionError` through to a raw traceback past `CalibrateError`. Fixed with `except (ReplayMiss, AskFailed, OSError)`. Third gap shape for DEC-1: a standalone function calling a method that does the I/O. Still not mechanical without call-graph knowledge; note.
+
+### F-1 — note (2026-09-18, RA-04)
+- The first URL-credential regex (`://[^/@\s]+@`) accepted a superset (any userinfo) of what needed scrubbing (`user:pass`), and corrupted `ssh://git@host` origins. Caught by the boundary reviewer's extra probe. Same shape as F-1; counted as a note since the fix landed in the same task.
+
+### H-3 — sighting 7 (2026-09-18, RA-04)
+- Builder wrote the implementation first, then `reset --hard` to the base, wrote the tests, committed them red, and restored the implementation from an orphaned commit. The red commit is genuine, the discipline was not: tests written with the code in view. Reviewer ran seven mutations and all were caught, so no harm this time; disclosed in the return (H-5 sighting 4).
+
+### H-6 — Harness: orchestrator dispatched the builder into a tree a reviewer was still using
+- **Date:** 2026-09-18 (RA-04 round 2)
+- The orchestrator sent a one-line fix round to the builder while the code reviewer still had a planted mutation in the builder's worktree. The builder found `ask.py` modified, discarded it, and continued. The reviewer had already captured its evidence, so nothing was lost — by luck. Harness, unbinned: the orchestrate skill should say "no builder round while a reviewer is in that tree", or the reviewer should plant in its own detached checkout like the boundary reviewer does.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
