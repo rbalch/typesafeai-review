@@ -25,6 +25,37 @@ tree, commit again) and calls `slice_diff` on it -- there is no patch-apply path
 case with no `before/` directory diffs against an empty tree (a wholly new file); no
 `after/` directory diffs to an empty tree (a wholly deleted file).
 
+## The second case kind: `real/`
+
+`uv run ts-review ... --case <dir>` (RA-04) turns one real pipeline run into the
+second fixture kind `calibrate.py` understands: no `before/`/`after/`, instead a
+`state/` directory --
+
+```
+fixtures/real/<case>/
+  state/
+    hunk-01.json, hunk-02.json, ...   redacted hunk states, exactly as sent
+    change.json                        redacted change-wide state, exactly as sent
+    keys.json                          {hunk_key | "<change>": {state, questions, request_key}}
+  responses/                           raw recorded answers, keyed by request_key
+  ts-review.md, ts-review.json         copies of the run's own outputs
+  meta.json                            repo, base, head, task_source, model, date, verdict, score
+  labels.json                          hand-written ground truth -- RA-05's job, not written here
+```
+
+`calibrate.py` tells the two kinds apart by `state/`'s presence and `before/`'s
+absence. A state-kind case never rebuilds a repo or re-slices a diff: `keys.json`
+already names every question id each key was eligible for, and the exact
+`request_key` (hashed from the *unredacted* state as sent) to look its answer up
+under `responses/` -- the redacted copy under `state/` is never rehashed.
+
+`fixtures/real/` holds every case recorded this way; `calibrate` walks it exactly
+like the top-level directory (`fixtures/real/*/`, not `fixtures/real/` itself).
+`fixtures/real/.gitkeep` keeps the directory in git before any case under it has a
+`labels.json` -- same rule as any other case (below): **a case directory with no
+`labels.json` is skipped, with one line on stderr naming it, not an error.** Adding
+`labels.json` to a case under `fixtures/real/` is RA-05's job, not this one's.
+
 ## `labels.json`
 
 ```json

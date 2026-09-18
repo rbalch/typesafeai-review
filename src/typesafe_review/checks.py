@@ -21,6 +21,17 @@ CheckStatus = Literal['pass', 'fail', 'not_run', 'not_applicable']
 DEFAULT_TIMEOUT_SECONDS = 600
 
 _REDACT_RE = re.compile(r'(?i)(token|secret|key)\s*[=:]\s*\S+')
+#: `scheme://user:pass@host/...` -- a URL's own userinfo, the shape a `git remote
+#: get-url origin` with embedded credentials takes (RA-04 fix round 1). Requires a
+#: `user:pass` pair, not just a bare `user@host` (RA-04 fix round 2): an
+#: `ssh://git@host/org/repo.git` origin has no password component at all, and
+#: redacting its bare `git` username would make a committed fixture's `meta.json`
+#: factually wrong about what the remote actually is. A bare-token-as-username
+#: `https://` origin (no `:pass`) is still handled upstream, by
+#: `pipeline._strip_url_userinfo` stripping the whole `http(s)` userinfo outright
+#: before `meta` is ever built -- this pattern is the backstop for what that
+#: doesn't cover (ssh URLs and scp-like `git@host:path` are left alone there too).
+_URL_CREDENTIAL_RE = re.compile(r'://[^/@:\s]+:[^/@\s]+@')
 
 
 class CheckError(Exception):
@@ -49,10 +60,14 @@ class CheckReport:
 
 def redact(text: str) -> str:
     """Replace anything that looks like `token=`/`secret=`/`key=<value>` with
-    `<redacted>`. Public so any module that surfaces captured subprocess or `gh`
-    output in an error message (`prsource.py`'s `fetch_pr`, RA-02 fix round 1) can
-    reuse the same pattern instead of hand-rolling a second one."""
-    return _REDACT_RE.sub('<redacted>', text)
+    `<redacted>`, and any URL's embedded `user:pass@` with `<redacted>@` (RA-04
+    fix round 1: a `git remote get-url origin` can carry a credential this way).
+    Public so any module that surfaces captured subprocess or `gh` output, or a
+    git remote URL, in an error message or a written file (`prsource.py`'s
+    `fetch_pr`, RA-02 fix round 1; `case.py`'s `meta.json`, RA-04) can reuse the
+    same patterns instead of hand-rolling a second one."""
+    text = _REDACT_RE.sub('<redacted>', text)
+    return _URL_CREDENTIAL_RE.sub('://<redacted>@', text)
 
 
 def _tail_notes(output: str) -> str:
