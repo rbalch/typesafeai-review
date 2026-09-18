@@ -254,6 +254,27 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-17 (T-09..T-11)
 - T-09: markdown `Final Notes` always `None.`. T-10: `pipeline.run` takes explicit `worktree`/`base`; an acceptance assertion corrected post-red. T-11: `severity='modifier'` gets F2; `pyproject.toml` excludes `fixtures/` from ruff/ty. Every one was disclosed in the return under "deviations", none hidden. Harness, unbinned: the "report deviations with reasons" line in the builder brief is doing real work; keep it.
 
+### F-15 — sighting 2 (2026-09-18, RA-01)
+- `cli._doctor` printed `ok` and exited 0 once `ask_all` returned, never reading the Noul it asked for. The recorded live answer to "Answer yes." was 0.46 and the acceptance test passed on it; a forged 0.02 passed too. Both reviewers found it by execution (moving `print('ok')` ahead of the call survived 16 tests). Fixed: a `check == "ping"` Noul, `noul >= 0.5` or exit 1, two tests that catch the mutation. Same claim as F-15: success read from the call returning, not from the answer's value. Sightings now 2; the task file said "prints `ok`, exit 0" and never mentioned the answer (counted with H-1 below).
+
+### H-1 — sighting 6 (2026-09-18, RA-01..RA-04 critic pass)
+- RA-01: `--env-file` named as a search location but never as a flag; failure stderr "names the four locations" with no format; the doctor fixture dir missing from `files`; success condition for `--doctor` written without checking the answer. RA-02: acceptance named `extract_brief` for a `Task` that only `parse_task` returns; `pipeline.py` in `files` with no scope bullet saying how the resolved task reaches it. RA-04: `checks.py` missing from `files` for the `_redact` rename; redacted state files vs a replay hash of the unredacted state — a real contradiction, one human decision (store the hash in `keys.json`). Fourth batch, same cause.
+
+### F-16 — note (2026-09-18, RA-01)
+- `calibrate._resolve_model` duplicated `pipeline._resolve_model` since T-11; the reviewer flagged it when RA-01 made the pipeline one public. Folded in the fix round. Origin is the T-11 batch already counted as sighting 2, so no new sighting; the pattern is one fresh instance from a control.
+
+### F-24 — Feature reads ambient environment; the test suite inherits the developer's machine
+- **Date:** 2026-09-18 (RA-01)
+- **Bin:** 2
+- **Claim:** a `src/` function walks cwd/HOME for config (`.env`, `~/.config`) and no autouse test fixture redirects those roots, so a test calling the entry point can pick up a real key and make a live call.
+- **Sightings:** 1
+- **Action:** soft — builder added `tests/conftest.py` (isolates HOME, cwd, `TYPESAFE_*`) unprompted and disclosed it. Both reviewers verified it blocks the live path. Checkable: any `os.environ`/`Path.home()`/`Path.cwd()` read in `src/` without a matching autouse fixture in `tests/conftest.py`.
+
+### F-25 — Diagnostic path catches only the expected error type
+- **Date:** 2026-09-18 (RA-01)
+- **Bin:** 3
+- **Claim:** `cli._doctor` catches `AskFailed` only; an unexpected exception is a raw traceback where the pipeline path prints one line. Boundary reviewer called it acceptable for a diagnostic. Taste; logged, no action.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
