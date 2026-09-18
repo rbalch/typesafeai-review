@@ -299,6 +299,37 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Bin:** 3
 - **Claim:** `test_pr_red_sha_that_does_not_exist…` places a copied response under a sha256 literal computed offline; the reviewer judged it legitimate plumbing (the key is not what the test asserts) but a maintenance cost. Taste; logged.
 
+### F-28 — Fixture where the right and the naive implementation agree
+- **Date:** 2026-09-18 (RA-03)
+- **Bin:** 2
+- **Claim:** a test for `merge-base(base, X)` builds a repo where the base branch never moves past the fork point, so tip == merge-base and `rev-parse(base)` passes too. Three of `resolve_target`'s modes were tested that way; the no-mode branch shipped with `rev-parse` (the PR #14 bug class, back one module over) and 16 tests stayed green. Fixed: every merge-base test advances the base first; mutations now fail.
+- **Sightings:** 1
+- **Action:** soft. Checkable in principle: a test that asserts a merge-base result on a repo with no commit on the base after the branch point. Different mechanism from F-10 (which recomputes expectations); here the fixture is degenerate.
+
+### F-19 — sighting 3 (2026-09-18, RA-03)
+- `test_temp_worktree_is_removed_even_when_the_pipeline_raises` raised `SlicingError`, which `_run_pipeline` catches, so the `finally` it claimed to test never ran; deleting the `finally` passed. Fixed with a `RuntimeError` that escapes. Bin 1 at three sightings: per the F-19 action line, add `--cov` with a per-file floor (or a branch-coverage check on `finally`/`except` in `src/`) to `make test`. **Recommended to the human; not done in this batch.**
+
+### F-3 — sighting 5 (2026-09-18, RA-03)
+- `target.py` declared `TargetError` and called `prsource.fetch_pr`, whose `PRSourceError` escaped `cli.main` as a raw traceback on `--pr` with no `gh`. DEC-1 is green: the leak is a call into a sibling module's raising function, not raw I/O. Second gap shape in DEC-1 (first: `unlink`/`os.replace`). Fixed: wrapped as `TargetError`. A supersession adding "a call to a function that raises another module's `<Y>Error`" is not mechanical (needs call-graph knowledge); note only.
+
+### F-29 — One external fetch made from two resolution paths in a single run
+- **Date:** 2026-09-18 (RA-03)
+- **Bin:** 2
+- **Claim:** `--pr N` called `gh pr view` once in `target.resolve_target` and again in `cli._resolve_task_and_red_sha`; two API calls and a race window between reads. Fixed: `Target.pr` carries the fetched PR through. Checkable: the same subprocess/network wrapper called from two functions on one `main` path.
+- **Sightings:** 1
+- **Action:** soft.
+
+### F-30 — Output dict omits a key when the value is None
+- **Date:** 2026-09-18 (RA-03)
+- **Bin:** 3
+- **Claim:** `render_json` left out `head`/`range_source` when `None` to keep golden files unchanged, giving `ts-review.json` two shapes. Fixed: always emitted. Taste with a consumer cost; logged.
+
+### H-1 — sighting 7 (2026-09-18, RA-03)
+- Acceptance bullet "`--commit <sha> --replay <dir>` against the replayed sample repo → exit 3" cannot be met: no recorded fixture matches commit mode's diff shape (one commit, not the two the no-task fixture was recorded on). Builder stubbed `ask_all`; reviewer confirmed no real replay was possible. Planning finding: a criterion that names a fixture that does not exist. Also the post-red test edit (status check → HEAD+index, because ref-mode outputs land in the repo root by design) was the criterion's own wording being more precise than the first test; human accepted.
+
+### H-5 — sighting 3 (2026-09-18, RA-03)
+- Builder disclosed the post-red test fixup, the `ask_all` stub, and that its first call-count test passed vacuously (fake sha failed target resolution before the second fetch). All three surfaced in the return.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
