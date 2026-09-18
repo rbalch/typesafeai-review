@@ -148,17 +148,28 @@ def run(
     red_sha: str | None,
     task_source: str,
     red_sha_source: str,
+    head: str,
+    range_source: str,
+    out_dir: Path,
 ) -> int:
-    """Steps 0-7 against `worktree`, diffing `base...HEAD`. Returns the exit code for
-    `review.verdict` (spec §3: 0 APPROVE, 2 CHANGES_REQUESTED, 3 NEEDS_HUMAN).
+    """Steps 0-7 against `worktree`, diffing `base...HEAD` of `worktree` (RA-03:
+    `worktree` is either the real `--worktree`, or a temporary detached worktree
+    checked out at `head` for any ref mode -- `cli.py` decides which and always
+    cleans the temporary one up). Returns the exit code for `review.verdict` (spec
+    §3: 0 APPROVE, 2 CHANGES_REQUESTED, 3 NEEDS_HUMAN).
 
     `task`, `red_sha`, `task_source` and `red_sha_source` are resolved by `cli.py`
     before this is called -- a file path or a PR (RA-02) for the first two, `"file" |
     "pr" | "none"` / `"flag" | "pr" | "none"` for the sources -- so this module never
     calls `load_task` or `prsource.py` itself; it only threads the two labels through
-    to `render_json`/`render_markdown`.
+    to `render_json`/`render_markdown`. `head` and `range_source` (RA-03) are
+    `target.Target.head_sha`/`.source`, threaded straight to `render_json`. `out_dir`
+    (RA-03 item 4) is where step 0 deletes stale outputs and where the new ones are
+    written -- the worktree root in the no-mode case, `--out` or the source repo root
+    otherwise; it is never `worktree` itself when `worktree` is a temporary detached
+    one, since that directory is removed before the caller ever sees the outputs.
     """
-    _clean_stale_outputs(worktree)
+    _clean_stale_outputs(out_dir)
 
     _log('checks…')
     check_report = run_checks(worktree, red_sha)
@@ -188,7 +199,9 @@ def run(
     _log('write')
     notes = _collect_notes(change, conventions)
     md = render_markdown(review, task_source, red_sha_source)
-    json_obj = render_json(review, ask_result, worktree, base, notes, task_source, red_sha_source)
-    write_outputs(worktree, md, json_obj)
+    json_obj = render_json(
+        review, ask_result, worktree, base, notes, task_source, red_sha_source, head=head, range_source=range_source
+    )
+    write_outputs(out_dir, md, json_obj)
 
     return _EXIT_BY_VERDICT[review.verdict]

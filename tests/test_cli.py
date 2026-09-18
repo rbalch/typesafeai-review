@@ -66,11 +66,16 @@ def test_calibrate_short_circuits_before_worktree_check(tmp_path: Path, capsys: 
     assert '--worktree' not in captured.err
 
 
-def test_missing_worktree_is_argparse_style_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as exc:
-        main([])
-    assert exc.value.code == 2
+def test_missing_worktree_outside_a_repo_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
+    """RA-03: `--worktree` is no longer a required flag -- it defaults to the
+    toplevel of cwd (`tests/test_target.py` covers that default succeeding). The
+    autouse `_isolated_env` fixture already chdirs into a throwaway, non-git tmp
+    dir, so omitting `--worktree` here fails to resolve a default and exits 1, not
+    argparse's usage-error exit 2.
+    """
+    rc = main([])
     err = capsys.readouterr().err
+    assert rc == EXIT_TOOL_FAILURE
     assert '--worktree' in err
 
 

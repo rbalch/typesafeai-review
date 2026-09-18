@@ -4,6 +4,8 @@
   "summary": "Human judgement is needed before this can proceed.",
   "worktree": "/app/.claude/worktrees/T-09-render",
   "base": "develop",
+  "head": null,
+  "range_source": null,
   "context": {
     "task_source": "file",
     "red_sha_source": "flag"

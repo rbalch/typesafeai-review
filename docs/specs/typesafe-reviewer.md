@@ -23,7 +23,7 @@ is a subprocess exit code, and the weights live in a Python file under version c
 
 ## 3. Contract (unchanged from `reviewer.md`)
 
-- Runs in the builder's worktree, reviews `develop..HEAD`.
+- Runs in the builder's worktree, reviews `develop...HEAD`.
 - Writes `ts-review.md` and `ts-review.json` at the worktree root, from scratch, same
   schema as the LLM reviewer's `review.md` / `review.json`. Distinct names so both
   reviewers can run on one worktree and their outputs sit side by side (§9).
@@ -34,7 +34,9 @@ is a subprocess exit code, and the weights live in a Python file under version c
 Invocation replaces the `reviewer` subagent dispatch in the orchestrate skill:
 
 ```
-uv run ts-review --worktree <path> [--task <task-file>] [--red-sha <sha>] [--base <ref>]
+uv run ts-review [--worktree <path>] [--task <task-file>] [--red-sha <sha>] [--base <ref>]
+                 [--out <dir>]
+                 [--range <A..B|A...B> | --commit <sha> | --ref <ref> | --pr <n>]
                  [--dump-state <dir>] [--record <dir>] [--replay <dir>]
 uv run ts-review --calibrate <fixtures-dir>
 ```
@@ -43,20 +45,43 @@ Exit 0 on `APPROVE`, 2 on `CHANGES_REQUESTED`, 3 on `NEEDS_HUMAN`, 1 on tool fai
 
 ### 3.1 CLI rules
 
-- **Any worktree.** `--worktree` is the only required flag (waived under
-  `--calibrate`, which reads a fixture directory instead). `--task` and `--red-sha`
-  are optional so the tool runs on an arbitrary folder; when they are absent the
-  per-hunk review still runs in full, the task and red-proof checks are recorded as
-  `not_run`, and the verdict is `NEEDS_HUMAN` / `missing_context` (§6.6). Findings
-  are still written. The ad-hoc run is the experiment; the orchestrator always passes
-  both flags.
+- **Any worktree, any ref (RA-03).** `--worktree` is optional: it defaults to the
+  toplevel of cwd (`git rev-parse --show-toplevel`), so `ts-review` run from inside
+  any repo reviews that repo without a flag. `--task` and `--red-sha` are optional so
+  the tool runs on an arbitrary folder; when they are absent the per-hunk review still
+  runs in full, the task and red-proof checks are recorded as `not_run`, and the
+  verdict is `NEEDS_HUMAN` / `missing_context` (§6.6). Findings are still written. The
+  ad-hoc run is the experiment; the orchestrator always passes both flags.
+- **Target modes.** At most one of `--range`, `--commit`, `--ref`, `--pr` (an argparse
+  error otherwise). Each resolves to a `(base_sha, head_sha)` pair, both recorded in
+  `ts-review.json` as full shas, alongside `range_source`
+  (`worktree | range | commit | ref | pr`):
+  - `--range A..B` / `A...B` → `merge-base(A, B)`, `B`.
+  - `--commit S` → `S^`, `S`.
+  - `--ref R` → `merge-base(<base>, R)`, `R`.
+  - `--pr N` → an open PR: `merge-base(base_ref, head_sha)`, `head_sha`; a merged PR
+    with a one-parent merge commit (squash): `M^`, `M`; a two-parent merge commit:
+    `merge-base(M^1, M^2)`, `M^2`. `--pr` also implies `--task N` unless `--task` was
+    given explicitly.
+  - No mode flag → today's behaviour: `merge-base(<base>, HEAD)`, `HEAD` of
+    `--worktree`.
+  - An unknown ref exits 1; the pipeline never falls back to reviewing the wrong
+    range.
+  - In any ref mode the pipeline runs in a temporary detached worktree
+    (`git worktree add --detach`), never the user's checkout, and the worktree is
+    always removed afterwards, including when the pipeline raises.
 - **`--base`** defaults to `develop`; if that ref does not exist, fall back to `main`,
-  then `master`; if none exist, exit 1. The chosen base is recorded in `ts-review.json`.
-- **Outputs.** Step 0 deletes `ts-review.md` and `ts-review.json` from the worktree root if
-  they exist. Both are written last, atomically (temp file + rename), only after every
-  step succeeded. A crash or API failure leaves neither file.
+  then `master`; if none exist, exit 1. Only used by the no-mode default and `--ref`.
+  The chosen base is recorded in `ts-review.json`.
+- **`--out <dir>`** is where `ts-review.md` / `ts-review.json` are written. Default: the
+  worktree root in the no-mode case (today's contract), the source repo root (the
+  resolved `--worktree`) in a ref mode.
+- **Outputs.** Step 0 deletes `ts-review.md` and `ts-review.json` from `--out` (or its
+  default) if they exist. Both are written last, atomically (temp file + rename), only
+  after every step succeeded. A crash or API failure leaves neither file.
 - **`--dump-state <dir>`** writes every state + question set as JSON and exits without
-  calling the API. Used to inspect exactly what Jev sees and to seed fixtures.
+  calling the API. Used to inspect exactly what Jev sees and to seed fixtures. Only
+  supports today's default target, not a ref mode.
 - **`--record <dir>` / `--replay <dir>`** store and replay responses keyed by a hash of
   `(state, questions, model)`. The test suite runs on `--replay` only.
 - **Task file** is the planner format (`tasks/README.md` in `new-project`): YAML
@@ -70,7 +95,7 @@ Exit 0 on `APPROVE`, 2 on `CHANGES_REQUESTED`, 3 on `NEEDS_HUMAN`, 1 on tool fai
 ```
  0. clean       delete ts-review.md / .json if present       (code)
  1. checks      run red proof · green at HEAD · make check   (subprocess, no model)
- 2. slice       git diff develop..HEAD → hunks + context     (code)
+ 2. slice       git diff develop...HEAD → hunks + context     (code)
  3. gather      per hunk: task file, before/after excerpt,   (code)
                 related tests, AGENTS.md shape section
  4. ask         one system_one() call per hunk,              (Jev, fan-out)
@@ -111,7 +136,7 @@ language and kind (new file, test file, deleted lines only, etc.).
 
 ### 4.4 Slicing details
 
-- Hunk boundaries from `git diff --unified=0 <base>..HEAD`; `hunk.after` from
+- Hunk boundaries from `git diff --unified=0 <base>...HEAD`; `hunk.after` from
   `git show HEAD:<path>` with 20 lines each side.
 - Pass a temp attributes file (`*.py diff=python`) so hunk headers carry the enclosing
   `def`/`class`, which is `symbol_or_area`. Without it git only sees top-level names.
@@ -365,7 +390,7 @@ Files in `tasks/typesafe-reviewer/` (untracked, see `tasks/README.md`). Run with
 |---|---|---|
 | T-01 | Package scaffold, `review` CLI entry, output hygiene | — |
 | T-02 | Parse planner task files | — |
-| T-03 | Slice `base..HEAD` into hunks | — |
+| T-03 | Slice `base...HEAD` into hunks | — |
 | T-04 | Deterministic checks | — |
 | T-05 | State builders, `--dump-state` | T-01, T-02, T-03 |
 | T-06 | Question catalog | — |
