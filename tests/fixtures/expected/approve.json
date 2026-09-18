@@ -4,6 +4,8 @@
   "summary": "No blocking issues found; ready to merge.",
   "worktree": "/app/.claude/worktrees/T-09-render",
   "base": "develop",
+  "head": null,
+  "range_source": null,
   "context": {
     "task_source": "file",
     "red_sha_source": "flag"

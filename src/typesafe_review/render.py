@@ -190,28 +190,45 @@ def render_json(
     notes: list[str],
     task_source: str,
     red_sha_source: str,
+    *,
+    head: str | None = None,
+    range_source: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    """`head`/`range_source` (RA-03 item 5: the full head sha and `worktree | range
+    | commit | ref | pr`) are keyword-only, defaulting to `None` for a caller that
+    predates RA-03's `target.py` -- but always present as keys in the returned dict
+    (fix round 1, item 5: one JSON shape, not two -- a caller that omits them gets
+    `"head": null` / `"range_source": null`, never a missing key). `pipeline.py`
+    always passes both.
+    """
+    data: dict[str, Any] = {
         'verdict': review.verdict.value,
         'score': review.score,
         'summary': review.summary,
         'worktree': str(worktree),
         'base': base,
-        'context': {'task_source': task_source, 'red_sha_source': red_sha_source},
-        'required_checks': [
-            {'name': check.name, 'result': check.status, 'notes': check.notes} for check in review.required_checks
-        ],
-        'findings': [_finding_to_dict(f) for f in review.findings],
-        'uncertain': [_finding_to_dict(f) for f in review.uncertain],
-        'counts': dict(review.counts),
-        'stop_reason': review.stop_reason,
-        'engine': {
-            'model': engine.model,
-            'requests': engine.requests,
-            'input_tokens': engine.input_tokens,
-        },
-        'notes': list(notes),
+        'head': head,
+        'range_source': range_source,
     }
+    data.update(
+        {
+            'context': {'task_source': task_source, 'red_sha_source': red_sha_source},
+            'required_checks': [
+                {'name': check.name, 'result': check.status, 'notes': check.notes} for check in review.required_checks
+            ],
+            'findings': [_finding_to_dict(f) for f in review.findings],
+            'uncertain': [_finding_to_dict(f) for f in review.uncertain],
+            'counts': dict(review.counts),
+            'stop_reason': review.stop_reason,
+            'engine': {
+                'model': engine.model,
+                'requests': engine.requests,
+                'input_tokens': engine.input_tokens,
+            },
+            'notes': list(notes),
+        }
+    )
+    return data
 
 
 def _counts_from_findings(findings: list[dict[str, Any]]) -> dict[str, int]:

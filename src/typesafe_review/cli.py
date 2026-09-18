@@ -17,8 +17,10 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from typesafe_sdk import Noul
@@ -30,7 +32,7 @@ from typesafe_review.calibrate import run as run_calibrate
 from typesafe_review.checks import CheckError
 from typesafe_review.compose import ComposeInvariantError
 from typesafe_review.env import EnvError, load_env
-from typesafe_review.prsource import PRSourceError, extract_brief, extract_red_sha, fetch_pr, parse_pr_ref
+from typesafe_review.prsource import PRSourceError, PullRequest, extract_brief, extract_red_sha, fetch_pr, parse_pr_ref
 from typesafe_review.render import RenderError
 from typesafe_review.slicing import SlicingError, slice_diff
 from typesafe_review.state import (
@@ -40,6 +42,7 @@ from typesafe_review.state import (
     load_acceptance_tests,
     load_conventions,
 )
+from typesafe_review.target import TargetError, resolve_target
 from typesafe_review.taskfile import Task, TaskFileError, load_task, parse_task
 from typesafe_review.verdict import EXIT_APPROVE, EXIT_TOOL_FAILURE
 
@@ -63,7 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog='ts-review',
         description='AI-powered code review: deterministic checks + Jev per-hunk questions.',
     )
-    parser.add_argument('--worktree', type=Path, default=None, help='path to the builder worktree to review')
+    parser.add_argument(
+        '--worktree',
+        type=Path,
+        default=None,
+        help='path to the repo/worktree to review (default: toplevel of cwd, RA-03)',
+    )
     parser.add_argument(
         '--task',
         default=None,
@@ -74,6 +82,19 @@ def build_parser() -> argparse.ArgumentParser:
         '--base',
         default=None,
         help='base ref to diff against (default: develop, falling back to main, master)',
+    )
+    parser.add_argument(
+        '--out',
+        type=Path,
+        default=None,
+        help='directory to write ts-review.md/.json to (default: --worktree, or the source repo root in a ref mode)',
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--range', default=None, help='review A..B or A...B: merge-base(A, B) vs B (RA-03)')
+    mode_group.add_argument('--commit', default=None, help='review a single commit S: S^ vs S (RA-03)')
+    mode_group.add_argument('--ref', default=None, help='review a branch or ref R: merge-base(<base>, R) vs R (RA-03)')
+    mode_group.add_argument(
+        '--pr', type=int, default=None, help='review a PR by number, merged or not (RA-03; implies --task)'
     )
     parser.add_argument('--dump-state', type=Path, default=None, help='write state + questions as JSON and exit')
     parser.add_argument('--record', type=Path, default=None, help='record API responses to this directory')
@@ -104,6 +125,25 @@ def _worktree_root_error(path: Path) -> str | None:
     if toplevel != path.resolve():
         return f'not a worktree root: {path} (root is {toplevel})'
     return None
+
+
+def _default_worktree() -> Path | None:
+    """The toplevel of the cwd's git repo, or `None` if cwd is not inside one
+    (RA-03 item 2: `--worktree` is optional in every mode; this is what it defaults
+    to). Never raises: a missing `git` binary or a non-repo cwd both just mean "no
+    default", for the caller to report."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).resolve()
 
 
 def _resolve_base(worktree: Path, base: str | None) -> str | None:
@@ -244,15 +284,18 @@ def _confirmed_commit_exists(worktree: Path, sha: str) -> bool:
 
 
 def _resolve_task_and_red_sha(
-    worktree: Path, task_arg: str | None, red_sha_arg: str | None
+    worktree: Path, task_arg: str | None, red_sha_arg: str | None, pr: PullRequest | None = None
 ) -> tuple[Task | None, str, str | None, str]:
     """`(task, task_source, red_sha, red_sha_source)` for `pipeline.run` (RA-02).
 
     `task_arg` a PR ref -> fetch the PR, parse its brief, and (absent `--red-sha`)
     take a red-sha out of the body if `git cat-file` confirms the commit exists in
     `worktree`. `task_arg` anything else -> a file path, exactly as before RA-02.
-    Raises `PRSourceError` / `TaskFileError` for the caller to turn into a stderr
-    line and exit 1; never guesses past those.
+    `pr`, if given and its `number` matches `task_arg`'s, is the PR `target.py`
+    already fetched for `--pr N` -- reused here instead of a second `gh pr view`
+    call (fix round 1, item 3: `--pr N` makes exactly one `gh` call). Raises
+    `PRSourceError` / `TaskFileError` for the caller to turn into a stderr line and
+    exit 1; never guesses past those.
     """
     red_sha = red_sha_arg
     red_sha_source = 'flag' if red_sha_arg is not None else 'none'
@@ -265,7 +308,8 @@ def _resolve_task_and_red_sha(
         task = load_task(Path(task_arg))
         return task, 'file', red_sha, red_sha_source
 
-    pr = fetch_pr(pr_number, worktree)
+    if pr is None or pr.number != pr_number:
+        pr = fetch_pr(pr_number, worktree)
     brief = extract_brief(pr.body)
     task = parse_task(brief, f'PR #{pr_number}')
 
@@ -308,47 +352,136 @@ def main(argv: list[str] | None = None) -> int:
         # requirement for this flag).
         return run_calibrate(args.calibrate)
 
+    # `--pr` implies `--task N` unless `--task` was already given (RA-03 scope item 1).
+    if args.pr is not None and args.task is None:
+        args.task = str(args.pr)
+
     if args.worktree is None:
-        parser.error('the following arguments are required: --worktree')
+        worktree = _default_worktree()
+        if worktree is None:
+            print(
+                'no --worktree given and `git rev-parse --show-toplevel` failed '
+                '(run ts-review from inside a git repo, or pass --worktree)',
+                file=sys.stderr,
+            )
+            return EXIT_TOOL_FAILURE
+    else:
+        worktree = args.worktree
+        root_error = _worktree_root_error(worktree)
+        if root_error is not None:
+            print(root_error, file=sys.stderr)
+            return EXIT_TOOL_FAILURE
 
-    worktree: Path = args.worktree
-    root_error = _worktree_root_error(worktree)
-    if root_error is not None:
-        print(root_error, file=sys.stderr)
-        return EXIT_TOOL_FAILURE
+    mode = (
+        'range'
+        if args.range is not None
+        else 'commit'
+        if args.commit is not None
+        else 'ref'
+        if args.ref is not None
+        else 'pr'
+        if args.pr is not None
+        else 'worktree'
+    )
 
-    base = _resolve_base(worktree, args.base)
-    if base is None:
-        tried = args.base if args.base else ', '.join(BASE_CANDIDATES)
-        print(f'no base ref found (tried: {tried})', file=sys.stderr)
-        return EXIT_TOOL_FAILURE
-
-    print(f'base: {base}', file=sys.stderr)
+    # `--base` only feeds the no-mode default and `--ref` (merge-base(<base>, ref));
+    # `--range`/`--commit`/`--pr` compute their own range entirely from the ref/PR
+    # given, so resolving today's develop/main/master fallback for them would just
+    # be a spurious failure mode when none of those branches exist.
+    base: str | None = None
+    if mode in ('worktree', 'ref'):
+        base = _resolve_base(worktree, args.base)
+        if base is None:
+            tried = args.base if args.base else ', '.join(BASE_CANDIDATES)
+            print(f'no base ref found (tried: {tried})', file=sys.stderr)
+            return EXIT_TOOL_FAILURE
+        print(f'base: {base}', file=sys.stderr)
 
     if args.dump_state is not None:
         # Dump mode is read-only inspection of `worktree`; step 0 (stale-output
         # cleanup) must never run for it, or `--dump-state` would delete a
         # pre-existing `review.md` / `review.json` in a target that was never
-        # actually reviewed.
+        # actually reviewed. It only ever supports today's default target (RA-03
+        # does not extend it to a ref mode).
+        if mode != 'worktree' or base is None:
+            print('--dump-state does not support --range/--commit/--ref/--pr', file=sys.stderr)
+            return EXIT_TOOL_FAILURE
         return _dump_state(worktree, base, args.task, args.red_sha, args.dump_state)
 
     try:
-        task, task_source, red_sha, red_sha_source = _resolve_task_and_red_sha(worktree, args.task, args.red_sha)
+        target = resolve_target(worktree, args, base)
+    except TargetError as error:
+        print(str(error), file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+
+    print(f'target: {target.source} base={target.base_sha} head={target.head_sha}', file=sys.stderr)
+
+    try:
+        task, task_source, red_sha, red_sha_source = _resolve_task_and_red_sha(
+            worktree, args.task, args.red_sha, target.pr
+        )
     except (TaskFileError, PRSourceError) as error:
         print(str(error), file=sys.stderr)
         return EXIT_TOOL_FAILURE
 
+    out_dir = args.out if args.out is not None else worktree
+
+    def _run_pipeline(pipeline_worktree: Path) -> int:
+        try:
+            return pipeline.run(
+                args,
+                pipeline_worktree,
+                target.base_sha,
+                task,
+                red_sha,
+                task_source,
+                red_sha_source,
+                target.head_sha,
+                target.source,
+                out_dir,
+            )
+        except _PIPELINE_ERRORS as error:
+            print(str(error), file=sys.stderr)
+            return EXIT_TOOL_FAILURE
+        except subprocess.SubprocessError as error:
+            print(f'git error: {error}', file=sys.stderr)
+            return EXIT_TOOL_FAILURE
+        except OSError as error:
+            print(f'io error: {error}', file=sys.stderr)
+            return EXIT_TOOL_FAILURE
+
+    if target.source == 'worktree':
+        # Today's contract: run straight against the user's own worktree. Never the
+        # user's checkout in any other mode (RA-03 item 3).
+        return _run_pipeline(worktree)
+
+    # Any ref mode: never touch `worktree` (the source repo). Review a temporary
+    # detached worktree checked out at `target.head_sha` instead, and always remove
+    # it -- including when the pipeline raises -- matching `checks._red_proof`'s own
+    # cleanup shape (best-effort remove, then rmtree, then prune).
+    tmp_dir = Path(tempfile.mkdtemp(prefix='ts-review-target-'))
     try:
-        return pipeline.run(args, worktree, base, task, red_sha, task_source, red_sha_source)
-    except _PIPELINE_ERRORS as error:
-        print(str(error), file=sys.stderr)
-        return EXIT_TOOL_FAILURE
-    except subprocess.SubprocessError as error:
-        print(f'git error: {error}', file=sys.stderr)
-        return EXIT_TOOL_FAILURE
-    except OSError as error:
-        print(f'io error: {error}', file=sys.stderr)
-        return EXIT_TOOL_FAILURE
+        add_result = subprocess.run(
+            ['git', '-C', str(worktree), 'worktree', 'add', '--detach', str(tmp_dir), target.head_sha],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if add_result.returncode != 0:
+            print(
+                f'git worktree add --detach {tmp_dir} {target.head_sha} failed: {add_result.stderr.strip()}',
+                file=sys.stderr,
+            )
+            return EXIT_TOOL_FAILURE
+        return _run_pipeline(tmp_dir)
+    finally:
+        subprocess.run(
+            ['git', '-C', str(worktree), 'worktree', 'remove', '--force', str(tmp_dir)],
+            capture_output=True,
+            check=False,
+        )
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        subprocess.run(['git', '-C', str(worktree), 'worktree', 'prune'], capture_output=True, check=False)
 
 
 if __name__ == '__main__':
