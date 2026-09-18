@@ -57,10 +57,12 @@ def test_help_exits_0_and_lists_all_eight_flags(capsys: pytest.CaptureFixture[st
 
 
 def test_calibrate_short_circuits_before_worktree_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # A nonexistent fixtures dir is a `calibrate.py` error (T-11), not a `--worktree`
+    # one: `--calibrate` never resolves or checks `--worktree` at all.
     rc = main(['--calibrate', str(tmp_path / 'x')])
     captured = capsys.readouterr()
     assert rc == EXIT_TOOL_FAILURE
-    assert 'not implemented (T-11)' in captured.err
+    assert 'cannot list fixture cases' in captured.err
     assert '--worktree' not in captured.err
 
 
@@ -77,8 +79,12 @@ def test_base_fallback_picks_main_when_only_main_exists(tmp_path: Path, capsys: 
     rc = main(['--worktree', str(repo)])
     err = capsys.readouterr().err
     assert rc == EXIT_TOOL_FAILURE
-    assert 'main' in err
-    assert 'pipeline not implemented' in err
+    assert 'base: main' in err
+    # base resolved to 'main' with no other ref to diff against (base == HEAD, no
+    # task, no red sha): the pipeline (T-10) runs for real past this point and fails
+    # for a reason of its own -- here, no API key configured -- never the T-01
+    # placeholder this test used to pin.
+    assert 'checks…' in err
 
 
 def test_exit_1_when_no_candidate_base_ref_exists(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

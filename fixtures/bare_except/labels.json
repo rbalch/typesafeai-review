@@ -1,0 +1,9 @@
+{
+  "pkg.py@@@ -2 +2,4 @@ def load_config(path: str) -> dict:": {
+    "bare_except": true,
+    "swallows_exception": true
+  },
+  "<change>": {
+    "new_behaviour_untested": true
+  }
+}

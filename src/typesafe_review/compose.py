@@ -13,7 +13,14 @@ from dataclasses import dataclass
 from typesafe_sdk import Choice, SystemOneResponse
 
 from typesafe_review.checks import CheckFinding, CheckReport, CheckResult
-from typesafe_review.questions import CATALOG, Question, Severity, criterion_questions, questions_for
+from typesafe_review.questions import (
+    CATALOG,
+    Question,
+    Severity,
+    criterion_questions,
+    expected_change_questions,
+    expected_hunk_questions,
+)
 from typesafe_review.slicing import symbol_from_header
 from typesafe_review.state import HunkState
 from typesafe_review.taskfile import Task
@@ -103,19 +110,6 @@ def _catalog_lookup(task: Task | None) -> dict[str, Question]:
     if task is not None:
         lookup.update(criterion_questions(task))
     return lookup
-
-
-def _expected_hunk_questions(hunk_state: HunkState) -> dict[str, Question]:
-    """Every question the catalog says should have been asked about this hunk."""
-    return questions_for('hunk', language=hunk_state['file']['language'], is_test=hunk_state['file']['is_test'])
-
-
-def _expected_change_questions(task: Task | None) -> dict[str, Question]:
-    """Every question the catalog says should have been asked change-wide."""
-    expected = dict(questions_for('change'))
-    if task is not None:
-        expected.update(criterion_questions(task))
-    return expected
 
 
 def _assert_supported_primitives(questions: dict[str, Question]) -> None:
@@ -359,7 +353,7 @@ def compose(
     for hunk_state, answers in hunk_answers:
         path = hunk_state['file']['path']
         symbol = symbol_from_header(hunk_state['hunk']['header'])
-        expected = _expected_hunk_questions(hunk_state)
+        expected = expected_hunk_questions(hunk_state['file']['language'], hunk_state['file']['is_test'])
         _assert_supported_primitives(expected)
         findings, uncertain = _process_answers(catalog, answers, path=path, symbol=symbol, high_risk=False)
         hunk_findings.extend(findings)
@@ -381,7 +375,7 @@ def compose(
         catalog, change_answers, path=None, symbol=_CHANGE_AREA, high_risk=high_risk
     )
 
-    expected_change = _expected_change_questions(context.task)
+    expected_change = expected_change_questions(context.task)
     _assert_supported_primitives(expected_change)
     missing_change = _unanswered_findings(expected_change, change_answers, path=None, symbol=_CHANGE_AREA)
     if missing_change:

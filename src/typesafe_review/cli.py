@@ -1,9 +1,14 @@
 """`ts-review` entry point.
 
-T-01 scope only: parse every flag from spec §3, resolve the base ref, delete stale
-`ts-review.md` / `ts-review.json` in the worktree, and stop. No checks, no diff
-slicing, no model call yet — those are later tasks, named in the "not implemented
-(T-NN)" messages below so the CLI never claims work it has not done.
+Parses every flag from spec §3, resolves the base ref, and either serves `--dump-state`
+(T-01), `--calibrate` (T-11, `calibrate.run`), or hands off to `pipeline.run` (T-10)
+for the real steps 0-7.
+
+`main` is the one place every module's own exception type -- and a bare
+`subprocess.SubprocessError` (an unwrapped git call) or `OSError` (unwrapped file I/O,
+e.g. `pipeline.py`'s own stale-output cleanup or the recorder's cache file) -- gets
+turned into a stderr message and exit 1 (spec §6.7). Nothing upstream of here ever
+prints a raw traceback.
 """
 
 from __future__ import annotations
@@ -14,7 +19,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from typesafe_review.render import OUTPUT_JSON, OUTPUT_MD
+from typesafe_review import pipeline
+from typesafe_review.ask import AskFailed
+from typesafe_review.calibrate import run as run_calibrate
+from typesafe_review.checks import CheckError
+from typesafe_review.compose import ComposeInvariantError
+from typesafe_review.render import RenderError
 from typesafe_review.slicing import SlicingError, slice_diff
 from typesafe_review.state import (
     StateError,
@@ -28,11 +38,16 @@ from typesafe_review.verdict import EXIT_APPROVE, EXIT_TOOL_FAILURE
 
 BASE_CANDIDATES = ('develop', 'main', 'master')
 
-# Flags this task does not implement yet, and the task that will. Checked in this
-# order, all before step 0 (stale-output cleanup) touches the worktree.
-_NOT_IMPLEMENTED = (
-    ('record', 'T-07'),
-    ('replay', 'T-07'),
+#: Exceptions each module's own contract names (spec §6.7 exit-code table); a
+#: traceback from any of these escaping `main` is a blocker, not a review outcome.
+_PIPELINE_ERRORS = (
+    AskFailed,
+    TaskFileError,
+    CheckError,
+    SlicingError,
+    StateError,
+    ComposeInvariantError,
+    RenderError,
 )
 
 
@@ -85,18 +100,6 @@ def _resolve_base(worktree: Path, base: str | None) -> str | None:
         if result.returncode == 0:
             return ref
     return None
-
-
-def _clean_stale_outputs(worktree: Path) -> None:
-    """Step 0: delete ts-review.md / ts-review.json at the worktree root, if present.
-
-    Leaves the LLM reviewer's `review.md` / `review.json` alone -- distinct names so
-    both reviewers can run on one worktree without clobbering each other (spec §3).
-    """
-    for name in (OUTPUT_MD, OUTPUT_JSON):
-        candidate = worktree / name
-        if candidate.exists():
-            candidate.unlink()
 
 
 def _dump_state(worktree: Path, base: str, task_path: Path | None, red_sha: str | None, dump_dir: Path) -> int:
@@ -152,16 +155,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.calibrate is not None:
-        print('not implemented (T-11)', file=sys.stderr)
-        return EXIT_TOOL_FAILURE
+        # `--calibrate` never needs `--worktree`: it replays a labelled fixtures
+        # directory, not the worktree under review (T-01 already waives the
+        # requirement for this flag).
+        return run_calibrate(args.calibrate)
 
     if args.worktree is None:
         parser.error('the following arguments are required: --worktree')
-
-    for attr, task_id in _NOT_IMPLEMENTED:
-        if getattr(args, attr) is not None:
-            print(f'not implemented ({task_id})', file=sys.stderr)
-            return EXIT_TOOL_FAILURE
 
     worktree: Path = args.worktree
     root_error = _worktree_root_error(worktree)
@@ -184,10 +184,17 @@ def main(argv: list[str] | None = None) -> int:
         # actually reviewed.
         return _dump_state(worktree, base, args.task, args.red_sha, args.dump_state)
 
-    _clean_stale_outputs(worktree)
-
-    print('pipeline not implemented', file=sys.stderr)
-    return EXIT_TOOL_FAILURE
+    try:
+        return pipeline.run(args, worktree, base)
+    except _PIPELINE_ERRORS as error:
+        print(str(error), file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+    except subprocess.SubprocessError as error:
+        print(f'git error: {error}', file=sys.stderr)
+        return EXIT_TOOL_FAILURE
+    except OSError as error:
+        print(f'io error: {error}', file=sys.stderr)
+        return EXIT_TOOL_FAILURE
 
 
 if __name__ == '__main__':
