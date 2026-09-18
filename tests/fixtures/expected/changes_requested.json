@@ -1,0 +1,91 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "score": 2,
+  "summary": "1 blocker(s) and 1 important finding(s) must be resolved before merge.",
+  "worktree": "/app/.claude/worktrees/T-09-render",
+  "base": "develop",
+  "required_checks": [
+    {
+      "name": "red proof",
+      "result": "pass",
+      "notes": "2 acceptance tests fail at f00dcafe"
+    },
+    {
+      "name": "green at HEAD",
+      "result": "pass",
+      "notes": "same 2 pass"
+    },
+    {
+      "name": "make check",
+      "result": "fail",
+      "notes": "ruff: 1 error in src/example/config.py"
+    }
+  ],
+  "findings": [
+    {
+      "severity": "blocker",
+      "file": null,
+      "symbol_or_area": "<change>",
+      "issue": "The change reports success on a path it never verified.",
+      "why_it_matters": "A caller cannot tell a real success from an unverified one.",
+      "concrete_fix": "Check the condition before returning success.",
+      "blocks_merge": true,
+      "question_id": "success_on_unverified",
+      "probability": 0.82,
+      "confidence": null
+    },
+    {
+      "severity": "important",
+      "file": "src/example/config.py",
+      "symbol_or_area": "resolve_bind_address",
+      "issue": "The change duplicates existing behavior instead of using the shared helper.",
+      "why_it_matters": "The duplicated path can drift and create inconsistent results.",
+      "concrete_fix": "Route the new call through the existing helper and extend it if needed.",
+      "blocks_merge": true,
+      "question_id": "duplicates_helper",
+      "probability": 0.91,
+      "confidence": null
+    },
+    {
+      "severity": "minor",
+      "file": "src/example/config.py",
+      "symbol_or_area": "resolve_bind_address",
+      "issue": "An unexplained literal gates behaviour.",
+      "why_it_matters": "A future reader cannot tell why this value was chosen.",
+      "concrete_fix": "Name the constant and explain the choice.",
+      "blocks_merge": false,
+      "question_id": "magic_constant",
+      "probability": 0.78,
+      "confidence": null
+    },
+    {
+      "severity": "nit",
+      "file": "src/example/config.py",
+      "symbol_or_area": "resolve_bind_address",
+      "issue": "Uses `os.path` where `pathlib.Path` is the local convention.",
+      "why_it_matters": "Inconsistent path handling adds friction when reading nearby code.",
+      "concrete_fix": "Switch to `pathlib.Path`.",
+      "blocks_merge": false,
+      "question_id": "os_path_over_pathlib",
+      "probability": 0.76,
+      "confidence": null
+    }
+  ],
+  "uncertain": [],
+  "counts": {
+    "blocker": 1,
+    "important": 1,
+    "minor": 1,
+    "nit": 1
+  },
+  "stop_reason": "changes_requested",
+  "engine": {
+    "model": "jev-latest",
+    "requests": 7,
+    "input_tokens": 41200
+  },
+  "notes": [
+    "note one",
+    "note two"
+  ]
+}

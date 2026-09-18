@@ -1,0 +1,42 @@
+{
+  "verdict": "APPROVE",
+  "score": 5,
+  "summary": "No blocking issues found; ready to merge.",
+  "worktree": "/app/.claude/worktrees/T-09-render",
+  "base": "develop",
+  "required_checks": [
+    {
+      "name": "red proof",
+      "result": "pass",
+      "notes": "3 acceptance tests fail at a1b2c3d, ImportError"
+    },
+    {
+      "name": "green at HEAD",
+      "result": "pass",
+      "notes": "same 3 pass; tests/ unchanged since a1b2c3d"
+    },
+    {
+      "name": "make check",
+      "result": "pass",
+      "notes": "exit 0"
+    }
+  ],
+  "findings": [],
+  "uncertain": [],
+  "counts": {
+    "blocker": 0,
+    "important": 0,
+    "minor": 0,
+    "nit": 0
+  },
+  "stop_reason": "approved",
+  "engine": {
+    "model": "jev-latest",
+    "requests": 7,
+    "input_tokens": 41200
+  },
+  "notes": [
+    "note one",
+    "note two"
+  ]
+}

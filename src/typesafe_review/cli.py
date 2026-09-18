@@ -1,9 +1,9 @@
 """`ts-review` entry point.
 
 T-01 scope only: parse every flag from spec §3, resolve the base ref, delete stale
-`review.md` / `review.json` in the worktree, and stop. No checks, no diff slicing, no
-model call yet — those are later tasks, named in the "not implemented (T-NN)" messages
-below so the CLI never claims work it has not done.
+`ts-review.md` / `ts-review.json` in the worktree, and stop. No checks, no diff
+slicing, no model call yet — those are later tasks, named in the "not implemented
+(T-NN)" messages below so the CLI never claims work it has not done.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from typesafe_review.render import OUTPUT_JSON, OUTPUT_MD
 from typesafe_review.slicing import SlicingError, slice_diff
 from typesafe_review.state import (
     StateError,
@@ -87,8 +88,12 @@ def _resolve_base(worktree: Path, base: str | None) -> str | None:
 
 
 def _clean_stale_outputs(worktree: Path) -> None:
-    """Step 0: delete review.md / review.json at the worktree root, if present."""
-    for name in ('review.md', 'review.json'):
+    """Step 0: delete ts-review.md / ts-review.json at the worktree root, if present.
+
+    Leaves the LLM reviewer's `review.md` / `review.json` alone -- distinct names so
+    both reviewers can run on one worktree without clobbering each other (spec §3).
+    """
+    for name in (OUTPUT_MD, OUTPUT_JSON):
         candidate = worktree / name
         if candidate.exists():
             candidate.unlink()
