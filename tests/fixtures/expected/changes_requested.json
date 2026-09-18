@@ -4,6 +4,10 @@
   "summary": "1 blocker(s) and 1 important finding(s) must be resolved before merge.",
   "worktree": "/app/.claude/worktrees/T-09-render",
   "base": "develop",
+  "context": {
+    "task_source": "file",
+    "red_sha_source": "flag"
+  },
   "required_checks": [
     {
       "name": "red proof",

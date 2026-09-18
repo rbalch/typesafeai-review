@@ -47,14 +47,18 @@ class CheckReport:
     findings: list[CheckFinding] = field(default_factory=list)
 
 
-def _redact(text: str) -> str:
+def redact(text: str) -> str:
+    """Replace anything that looks like `token=`/`secret=`/`key=<value>` with
+    `<redacted>`. Public so any module that surfaces captured subprocess or `gh`
+    output in an error message (`prsource.py`'s `fetch_pr`, RA-02 fix round 1) can
+    reuse the same pattern instead of hand-rolling a second one."""
     return _REDACT_RE.sub('<redacted>', text)
 
 
 def _tail_notes(output: str) -> str:
     lines = output.splitlines()
     tail = lines[-30:]
-    return _redact('\n'.join(tail))
+    return redact('\n'.join(tail))
 
 
 def _run(cmd: list[str], cwd: Path, timeout: float) -> tuple[int | None, str]:

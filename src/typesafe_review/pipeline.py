@@ -49,7 +49,7 @@ from typesafe_review.state import (
     load_acceptance_tests,
     load_conventions,
 )
-from typesafe_review.taskfile import Task, load_task
+from typesafe_review.taskfile import Task
 from typesafe_review.verdict import EXIT_APPROVE, EXIT_CHANGES_REQUESTED, EXIT_NEEDS_HUMAN, Verdict
 
 _EXIT_BY_VERDICT = {
@@ -140,24 +140,35 @@ def _collect_notes(change: Change, conventions: str) -> list[str]:
     return notes
 
 
-def run(args: argparse.Namespace, worktree: Path, base: str) -> int:
+def run(
+    args: argparse.Namespace,
+    worktree: Path,
+    base: str,
+    task: Task | None,
+    red_sha: str | None,
+    task_source: str,
+    red_sha_source: str,
+) -> int:
     """Steps 0-7 against `worktree`, diffing `base...HEAD`. Returns the exit code for
-    `review.verdict` (spec §3: 0 APPROVE, 2 CHANGES_REQUESTED, 3 NEEDS_HUMAN)."""
+    `review.verdict` (spec §3: 0 APPROVE, 2 CHANGES_REQUESTED, 3 NEEDS_HUMAN).
+
+    `task`, `red_sha`, `task_source` and `red_sha_source` are resolved by `cli.py`
+    before this is called -- a file path or a PR (RA-02) for the first two, `"file" |
+    "pr" | "none"` / `"flag" | "pr" | "none"` for the sources -- so this module never
+    calls `load_task` or `prsource.py` itself; it only threads the two labels through
+    to `render_json`/`render_markdown`.
+    """
     _clean_stale_outputs(worktree)
 
-    task: Task | None = None
-    if args.task is not None:
-        task = load_task(args.task)
-
     _log('checks…')
-    check_report = run_checks(worktree, args.red_sha)
+    check_report = run_checks(worktree, red_sha)
 
     _log('slice…')
     change = slice_diff(worktree, base)
 
     _log('state…')
     conventions = load_conventions(worktree)
-    acceptance_tests = load_acceptance_tests(worktree, args.red_sha)
+    acceptance_tests = load_acceptance_tests(worktree, red_sha)
     hunk_states = build_hunk_states(task, change, conventions)
     change_state = build_change_state(task, change, acceptance_tests)
 
@@ -171,13 +182,13 @@ def run(args: argparse.Namespace, worktree: Path, base: str) -> int:
     change_answers = ask_result.answers[_CHANGE_KEY]
 
     _log('compose')
-    context = Context(task=task, red_sha=args.red_sha, src_diff=change.src_diff, test_diff=change.test_diff)
+    context = Context(task=task, red_sha=red_sha, src_diff=change.src_diff, test_diff=change.test_diff)
     review = compose(check_report, hunk_answers, change_answers, context)
 
     _log('write')
     notes = _collect_notes(change, conventions)
-    md = render_markdown(review)
-    json_obj = render_json(review, ask_result, worktree, base, notes)
+    md = render_markdown(review, task_source, red_sha_source)
+    json_obj = render_json(review, ask_result, worktree, base, notes, task_source, red_sha_source)
     write_outputs(worktree, md, json_obj)
 
     return _EXIT_BY_VERDICT[review.verdict]

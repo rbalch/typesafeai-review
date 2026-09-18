@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from typesafe_review.taskfile import Task, TaskFileError, load_task
+from typesafe_review.taskfile import Task, TaskFileError, load_task, parse_task
 
 FIXTURE_DIR = Path(__file__).parent / 'fixtures' / 'tasks'
 EXAMPLE_FIXTURE = FIXTURE_DIR / 'T-02-example.md'
@@ -81,3 +81,13 @@ def test_missing_title_raises(tmp_path: Path):
     p.write_text('---\nid: T-99\n---\n\n## Acceptance\n\n- do the thing\n')
     with pytest.raises(TaskFileError):
         load_task(p)
+
+
+def test_outer_blank_lines_do_not_change_the_parsed_task():
+    """RA-02 fix round 2: a `Task` (in particular `criteria_text`, which feeds the
+    change-wide state hash) must be identical whether `text` came from a file
+    exactly as written, or from a PR body brief that `prsource.extract_brief` pads
+    with -- or strips down to -- extra leading/trailing blank lines.
+    """
+    text = EXAMPLE_FIXTURE.read_text()
+    assert parse_task(text, 'a') == parse_task('\n\n' + text + '\n\n', 'a')

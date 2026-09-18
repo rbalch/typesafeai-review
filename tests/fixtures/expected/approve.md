@@ -1,5 +1,8 @@
 # Code Review
 
+- Task source: file
+- Red-sha source: flag
+
 ## Verdict
 
 - Verdict: APPROVE
