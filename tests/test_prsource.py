@@ -24,9 +24,23 @@ from typesafe_review.prsource import (
     fetch_pr,
     parse_pr_ref,
 )
-from typesafe_review.taskfile import Task, parse_task
+from typesafe_review.taskfile import Task, load_task, parse_task
 
 FIXTURE_PR13 = Path(__file__).parent / 'fixtures' / 'pr_bodies' / 'pr13.md'
+FIXTURE_PR2 = Path(__file__).parent / 'fixtures' / 'pr_bodies' / 'pr2.md'
+
+# `tasks/` is untracked (tasks/README.md); a worktree checkout, or CI, never has it.
+# Resolved relative to this file (repo root's `tasks/`), no home directory anywhere,
+# so this is not tied to one machine's checkout path (RA-02b round 3).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LIVE_TASK_DIRS = [REPO_ROOT / 'tasks' / 'typesafe-reviewer', REPO_ROOT / 'tasks' / 'run-anywhere']
+
+# A small, tracked corpus covering the shapes the live `tasks/` corpus has hit in
+# practice (plain title, backtick-leading, `: ` in the title, and all of that plus a
+# `"` and a `\`), each with a `files:` item containing a backtick -- so CI, which
+# never has the untracked `tasks/` dirs, still exercises the round-trip (RA-02b
+# round 3).
+CORPUS_DIR = Path(__file__).parent / 'fixtures' / 'task_files'
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +82,107 @@ def test_extract_brief_then_parse_task_on_pr13_body_yields_t11_with_three_bullet
 def test_extract_brief_with_no_details_block_raises():
     with pytest.raises(PRSourceError):
         extract_brief('Just a plain PR body with no task brief block.')
+
+
+# ---------------------------------------------------------------------------
+# RA-02b: PR #2's body wraps the brief in a ```markdown fence; PRs #13+ paste it
+# bare. Both shapes must parse; an unclosed fence is an error.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_brief_then_parse_task_on_pr2_body_yields_t02():
+    body = FIXTURE_PR2.read_text()
+    brief = extract_brief(body)
+    task = parse_task(brief, 'PR #2')
+    assert isinstance(task, Task)
+    assert task.id == 'T-02'
+
+
+def test_extract_brief_bare_form_still_parses():
+    # PR #13 pastes the brief with no fence at all -- the older, fenced shape must
+    # not break this one.
+    body = FIXTURE_PR13.read_text()
+    brief = extract_brief(body)
+    task = parse_task(brief, 'PR #13')
+    assert task.id == 'T-11'
+
+
+def test_extract_brief_fence_with_no_closing_line_raises():
+    body = (
+        '<details><summary>Task brief T-99</summary>\n\n'
+        '```markdown\n---\nid: T-99\ntitle: x\n## Acceptance\n- a\n'
+        '</details>\n'
+    )
+    with pytest.raises(PRSourceError):
+        extract_brief(body)
+
+
+def _wrap(brief_text: str, label: str, fenced: bool) -> str:
+    inner = f'```markdown\n{brief_text}\n```' if fenced else brief_text
+    return f'<details><summary>Task brief {label}</summary>\n\n{inner}\n\n</details>\n'
+
+
+def _round_trips(task_path: Path, fenced: bool) -> None:
+    text = task_path.read_text()
+    body = _wrap(text, task_path.stem, fenced)
+    source = f'wrapped {task_path.name} (fenced={fenced})'
+
+    expected = load_task(task_path)
+    actual = parse_task(extract_brief(body), source)
+    assert actual == expected
+
+
+def _iter_task_files(directories: list[Path]):
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        yield from sorted(directory.glob('*.md'))
+
+
+_CORPUS_FILES = list(_iter_task_files([CORPUS_DIR]))
+_LIVE_TASK_FILES = list(_iter_task_files(LIVE_TASK_DIRS))
+
+
+@pytest.mark.parametrize('fenced', [False, True])
+@pytest.mark.parametrize('task_path', _CORPUS_FILES, ids=lambda p: p.name)
+def test_tracked_corpus_task_file_round_trips_through_extract_brief(task_path: Path, fenced: bool):
+    """The tracked corpus in `tests/fixtures/task_files/` -- unlike `tasks/`, this
+    always exists, in a worktree and in CI alike."""
+    _round_trips(task_path, fenced)
+
+
+if not _LIVE_TASK_FILES:
+
+    def test_live_task_dirs_absent_skipped():
+        pytest.skip('tasks/typesafe-reviewer/ and tasks/run-anywhere/ are untracked and absent in this checkout')
+else:
+
+    @pytest.mark.parametrize('fenced', [False, True])
+    @pytest.mark.parametrize('task_path', _LIVE_TASK_FILES, ids=lambda p: p.name)
+    def test_every_live_task_file_round_trips_through_extract_brief(task_path: Path, fenced: bool):
+        _round_trips(task_path, fenced)
+
+
+def test_brief_mentioning_literal_closing_details_tag_still_round_trips():
+    """`_BRIEF_RE` must run to the *last* `</details>` in the body, not the first --
+    a brief whose own prose mentions the literal closing tag (RA-02's brief does, and
+    this one does too) must not truncate the match early. Pinned with a fenced body
+    since that shape makes an early truncation crash loudly (unclosed fence) instead
+    of silently returning a mangled brief."""
+    inner_task = (
+        '---\n'
+        'id: T-77\n'
+        'title: Some title\n'
+        '---\n\n'
+        '## Scope\n\n'
+        '1. Mentions the closing `</details>` tag in its own prose.\n\n'
+        '## Acceptance\n\n'
+        '- a\n'
+    )
+    body = _wrap(inner_task, 'T-77', fenced=True)
+    task = parse_task(extract_brief(body), 'T-77 body')
+    assert task.id == 'T-77'
+    assert task.acceptance == ['a']
 
 
 # ---------------------------------------------------------------------------

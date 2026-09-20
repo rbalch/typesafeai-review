@@ -7,12 +7,17 @@ section. Everything else in a task file (`status`, `depends_on`, `files`, `rules
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 _ACCEPTANCE_HEADING = '## Acceptance'
+
+#: A top-level `key: value` frontmatter line, with no leading whitespace, so list
+#: items (`  - \`foo\``) under a `files:`/`rules:` block are never matched.
+_TOP_LEVEL_LINE_RE = re.compile(r'^([A-Za-z0-9_-]+:[ \t]*)(.*)$')
 
 
 class TaskFileError(Exception):
@@ -95,10 +100,49 @@ def _split_frontmatter(text: str, source: str) -> tuple[dict, str]:
     frontmatter_text = '\n'.join(lines[1:end_index])
     body = '\n'.join(lines[end_index + 1 :])
 
-    data = yaml.safe_load(frontmatter_text)
+    try:
+        data = yaml.safe_load(_quote_backtick_values(frontmatter_text))
+    except yaml.YAMLError as e:
+        raise TaskFileError(f'{source}: frontmatter is not valid YAML ({e})') from e
     if not isinstance(data, dict):
         raise TaskFileError(f'{source}: frontmatter did not parse to a mapping')
     return data, body
+
+
+def _quote_backtick_values(frontmatter_text: str) -> str:
+    """Wrap a top-level `key: value` line's value in double quotes when the value,
+    left unquoted, is not valid YAML: it starts with a backtick (a reserved
+    indicator pyyaml refuses to scan, `` title: `--task` accepts … ``), or it
+    contains `: ` further in (read as a nested mapping key by a YAML parser,
+    `` title: Review any ref: `--pr` … ``). Any double quote already in the value is
+    escaped. Values that already parse fine as a plain scalar (no colon, no leading
+    backtick) or that are already a flow sequence/mapping/quoted string (`[...]`,
+    `{...}`, `"..."`, `'...'`) pass through unchanged -- deliberately, so a `files:`
+    or `depends_on:` list value is never touched.
+
+    Broader than a literal reading of "value starts with a backtick" (RA-02b scope
+    item 3): two of the six task files it names (`T-04`, `RA-03`) fail today for the
+    colon-in-value reason, not a leading backtick, so a backtick-only quote would
+    leave them broken and the task's own round-trip acceptance ("`load_task`
+    succeeds on every one of them, no tolerated failures") unmet. Reported to the
+    orchestrator rather than silently narrowed.
+
+    Backslash is escaped before `"` -- escaping `"` first and then blindly escaping
+    every `\\` would double-escape the backslash that quoting `"` just introduced,
+    and would leave any backslash already in the value (`` `re.sub(r"\\d")` ``)
+    looking to the YAML scanner like the start of an escape sequence for whatever
+    character follows it.
+    """
+    lines = []
+    for line in frontmatter_text.split('\n'):
+        match = _TOP_LEVEL_LINE_RE.match(line)
+        if match:
+            key, value = match.groups()
+            if value and value[0] not in '"\'[{|>' and (value.startswith('`') or ': ' in value):
+                escaped_value = value.replace('\\', '\\\\').replace('"', '\\"')
+                line = f'{key}"{escaped_value}"'
+        lines.append(line)
+    return '\n'.join(lines)
 
 
 def _extract_section(body: str, heading: str, source: str) -> str:
