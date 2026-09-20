@@ -23,7 +23,9 @@ tasks/
 
 ## Ids
 
-A task id is `<PREFIX>-NN`: an uppercase prefix, a dash, a zero-padded number. **Each
+A task id is `<PREFIX>-NN`: an uppercase prefix, a dash, a zero-padded number, optionally
+followed by a single lowercase letter (`T-01b`) to slot a follow-up task in after an
+existing one without renumbering. **Each
 plan owns one prefix and no two plans share one.** The first plan in a repo uses `T`;
 later plans pick a short prefix from their slug (`critic-tooling` → `CT`). The prefix is
 the only thing that ties a PR titled `CT-01: …` back to its plan, so `make tasks`
