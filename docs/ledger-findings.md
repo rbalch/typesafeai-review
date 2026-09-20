@@ -352,6 +352,26 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-18 (RA-04 round 2)
 - The orchestrator sent a one-line fix round to the builder while the code reviewer still had a planted mutation in the builder's worktree. The builder found `ask.py` modified, discarded it, and continued. The reviewer had already captured its evidence, so nothing was lost — by luck. Harness, unbinned: the orchestrate skill should say "no builder round while a reviewer is in that tree", or the reviewer should plant in its own detached checkout like the boundary reviewer does.
 
+### F-18 — sighting 2 (2026-09-20, RA-02b)
+- RA-02's PR-body fixture was PR #13 only; PRs #1–#12 fenced the brief in ```` ```markdown ```` and `--task 2` failed on first real use. Fixed with the fenced fixture and a round-trip test over every task file. Same claim: one fixture shape stood in for the producer's whole domain.
+
+### F-31 — Parser accepts only the input the author typed, not the input the producer writes
+- **Date:** 2026-09-20 (RA-02b)
+- **Bin:** 2
+- **Claim:** `taskfile` fed frontmatter straight to `yaml.safe_load`; the planner writes `title:` values that start with a backtick or contain `: `, both invalid YAML, so seven of eighteen real task files raised a raw `ScannerError` from `load_task`. No test loaded a real task file. Fixed: values quoted before parsing, yaml errors → `TaskFileError`, a tracked corpus of the four title shapes. Checkable: a parser in `src/` whose tests never run it over a sample of the producer's real output. Related to F-18 (fixture domain) and H-1 (planner writes what the code does not parse).
+- **Sightings:** 1
+- **Action:** soft. The planner skill should quote titles; noted for the human.
+
+### F-32 — Boundary parser silently concatenates ambiguous input
+- **Date:** 2026-09-20 (RA-02b)
+- **Bin:** 2
+- **Claim:** `extract_brief` runs to the last `</details>`; a body with a second `<details>` block (a CI log) yields the brief plus the log, no error. Task non-scope; the strict alternative breaks briefs whose text mentions the tag. Checkable: a regex over untrusted text with a greedy group and no count check on the delimiter.
+- **Sightings:** 1
+- **Action:** soft.
+
+### H-1 — sighting 8 (2026-09-20, RA-02b)
+- The task file named six files and one cause (leading backtick); two of them failed for `: ` in the value. Builder widened the fix and disclosed it (H-5 sighting 5). The round-trip test as first written hardcoded the author's home path and tolerated failures on the files it could not parse; both corrected in review.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
