@@ -25,10 +25,20 @@ from typesafe_review.checks import redact
 #: `13`, `#13`, or a GitHub PR URL, optionally with a trailing path/query/fragment.
 _PR_URL_RE = re.compile(r'^https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+)(?:[/?#].*)?$')
 
-#: The first `<details><summary>Task brief …</summary> … </details>` block. Non-greedy
-#: so a PR body with more than one `<details>` block still stops at the brief's own
-#: closing tag, not the last one in the body.
-_BRIEF_RE = re.compile(r'<details>\s*<summary>\s*Task brief[^<]*</summary>(.*?)</details>', re.DOTALL)
+#: `orchestrate`'s squash step (SKILL.md step 3) appends the whole task file verbatim
+#: as the *last* thing in the PR body, inside one `<details><summary>Task brief
+#: <id></summary> … </details>` block -- there is never more than one such block, and
+#: nothing follows it. Greedy so a brief whose own prose mentions `</details>` (this
+#: task's brief does, and RA-02's does) does not truncate the match at that inner
+#: occurrence: this regex always runs to the *last* `</details>` in the body, which is
+#: the real closing tag.
+_BRIEF_RE = re.compile(r'<details>\s*<summary>\s*Task brief[^<]*</summary>(.*)</details>', re.DOTALL)
+
+#: An opening fence line: ``` optionally followed by an info string (e.g. `markdown`).
+_FENCE_OPEN_RE = re.compile(r'^```[^\n`]*$')
+
+#: A closing fence line: bare ``` with nothing else on the line.
+_FENCE_CLOSE_RE = re.compile(r'^```$')
 
 #: `Red: <sha>` as a structured line (RA-05 adds it to the PR template; not written
 #: yet). Multiline so `^` matches the start of any line, not just the string start.
@@ -116,11 +126,26 @@ def fetch_pr(number: int, repo_dir: Path) -> PullRequest:
 
 def extract_brief(body: str) -> str:
     """The text inside the first `<details><summary>Task brief …</summary> …
-    </details>` block, leading/trailing blank lines trimmed. No block -> `PRSourceError`."""
+    </details>` block, leading/trailing blank lines trimmed. No block -> `PRSourceError`.
+
+    PRs #1-#12 additionally wrapped the brief in a single outer ```` ``` ```` fence
+    (optionally ```` ```markdown ````) inside that block; #13 onward paste it bare
+    (RA-02b). If the trimmed text starts with a fence line, that fence must also be
+    the last line, or the fence was never closed and the brief is malformed -> both
+    fence lines are stripped and the text between them (verbatim) is the brief.
+    """
     match = _BRIEF_RE.search(body)
     if match is None:
         raise PRSourceError('PR body has no <details><summary>Task brief …</summary> … </details> block')
-    return match.group(1).strip()
+    brief = match.group(1).strip()
+
+    lines = brief.split('\n')
+    if _FENCE_OPEN_RE.match(lines[0]):
+        if len(lines) < 2 or not _FENCE_CLOSE_RE.match(lines[-1]):
+            raise PRSourceError('Task brief block opens a ``` fence that is never closed')
+        brief = '\n'.join(lines[1:-1]).strip()
+
+    return brief
 
 
 def extract_red_sha(body: str) -> str | None:
