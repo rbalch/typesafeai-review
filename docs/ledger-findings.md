@@ -372,6 +372,38 @@ and forcing a harness observation into one loses what makes it interesting.
 ### H-1 — sighting 8 (2026-09-20, RA-02b)
 - The task file named six files and one cause (leading backtick); two of them failed for `: ` in the value. Builder widened the fix and disclosed it (H-5 sighting 5). The round-trip test as first written hardcoded the author's home path and tolerated failures on the files it could not parse; both corrected in review.
 
+### F-33 — A fixture writer omits a file its reader requires
+- **Date:** 2026-09-21 (RA-05)
+- **Bin:** 2
+- **Claim:** `case.write_case` (RA-04) wrote `keys.json` with the run's `criterion_*` ids but never `task.md`; `calibrate.load_case_task` needs `task.md` to register those ids, so `--calibrate fixtures/` raised `KeyError: criterion_1_satisfied` on every real case recorded with `--task`. RA-04's own tests wrote cases and read them back, but never ran a written case through `calibrate`. Checkable: a module that writes a directory format and a module that reads it, with no test that runs the writer's output through the reader. Sibling of F-31 (parser vs producer) from the producer's side.
+- **Sightings:** 1
+- **Action:** fixed in RA-05 (scope widened by the human; `task.md` written for file and PR sources). Found by the boundary reviewer by execution; the code reviewer's dry run had no `--task` and passed.
+- **Notes:** RA-05's non-scope said "no Python"; the fix needed four `src/`/test files beyond the two the amended task named (H-1 below).
+
+### F-6 — sighting 2 (2026-09-21, RA-05)
+- `cli` read the task file for `<case>/task.md` with a default `open()`; universal newlines turned CRLF into LF, and the "byte-equal" test used an LF fixture so the mutation survived. Same claim as F-6: text-mode decoding strips `\r` from data. Fixed with `open(newline='')` and a CRLF test that catches the mutation.
+
+### H-1 — sighting 9 (2026-09-21, RA-05)
+- Amended task named `case.py` and `tests/test_case.py`; the fix also needed `cli.py`, `pipeline.py`, `tests/test_pipeline.py`, `tests/test_target.py`, `fixtures/README.md`. The value had to be produced where the file/PR distinction lives and threaded through `pipeline.run`. Same shape: the task lists files by where the symptom is, not where the data flows.
+
+### F-34 — Long positional call threaded through monkeypatched stubs
+- **Date:** 2026-09-21 (RA-05)
+- **Bin:** 3
+- **Claim:** `pipeline.run` takes 11 positional parameters; adding one broke two test stubs that mirror its signature. Taste, pre-existing; keyword-only parameters or a small dataclass would end it.
+- **Sightings:** 1
+- **Action:** none.
+
+### H-3 — sighting 8 (2026-09-21, RA-05)
+- Round-2 red proof: the builder wrote the fix first, stashed the three source files, committed the tests, ran them red, restored the stash. Honest and disclosed, and the red was assertion-level (`FileNotFoundError` on `task.md`), so the proof holds; but the order was implementation-then-tests again.
+
+### H-7 — Harness: reviewer made a live API call during review
+- **Date:** 2026-09-21 (RA-05)
+- The code reviewer's dry run used `ts-review --case` without `--replay`, so it hit the API. Nothing in the brief forbade it; `AGENTS.md` forbids live calls in the test suite, not in a review. It cost a request and produced a case without `--task`, which is why it missed F-33. Reviewer briefs should say `--replay` or a fake, and should pass `--task` when the run under test does.
+
+### H-8 — Harness: builder worktree lost its branch mid-round
+- **Date:** 2026-09-21 (RA-05)
+- After round 3's commit the builder found `HEAD detached from c05f218` with no checkout of its own; it moved the branch to the commit and reattached. Cause unknown (a `git stash apply` in round 2 is the only unusual command). One sighting; watch for it.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
