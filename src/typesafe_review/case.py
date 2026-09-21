@@ -5,8 +5,10 @@ kind `calibrate.py` understands: `state/` (redacted hunk + change states, plus
 `keys.json`, the judge's checklist), `responses/` (filled by `case_recorder`, which
 mirrors whatever the run's own recorder served -- live or replayed -- into the case
 directory with no second network call), copies of the run's own `ts-review.md` /
-`ts-review.json`, and `meta.json`. A human only has to add `labels.json` next to it
-(RA-05) before `--calibrate fixtures/` counts it with the seed set.
+`ts-review.json`, `meta.json`, and (when a task was given) a byte-for-byte `task.md`
+copy (RA-05 scope item 6, so `calibrate.load_case_task` can register the case's
+`criterion_*` ids). A human only has to add `labels.json` next to it (RA-05) before
+`--calibrate fixtures/` counts it with the seed set.
 
 `case.py` declares its own `CaseError`; DEC-1 applies: every `open`/`Path` I/O call
 below sits inside a `try`.
@@ -132,6 +134,18 @@ def _write_text(path: Path, text: str) -> None:
         raise CaseError(f'{path}: cannot write ({e})') from e
 
 
+def _write_text_exact(path: Path, text: str) -> None:
+    """Like `_write_text`, but `newline=''` so no universal-newline translation can
+    make the write differ from `text` -- `task_text`'s own `newline=''` read
+    (`cli._resolve_task_and_red_sha`, for a file-sourced task) preserved the file's
+    exact line endings; this is the write side of that same byte-for-byte round
+    trip."""
+    try:
+        path.write_text(text, newline='')
+    except OSError as e:
+        raise CaseError(f'{path}: cannot write ({e})') from e
+
+
 def write_state_files(dump_dir: Path, hunk_states: list[HunkState], change_state: ChangeState) -> list[tuple[str, int]]:
     """Write `hunk-NN.json`/`change.json` under `dump_dir`, redacted (RA-04): the
     one writer both `cli._dump_state` (T-01/T-05's `--dump-state`) and
@@ -166,6 +180,7 @@ def write_case(
     review_json: dict[str, Any],
     review_md: str,
     meta: dict[str, Any],
+    task_text: str | None = None,
 ) -> None:
     """Write one real-run case under `case_dir` (RA-04 item 1).
 
@@ -176,6 +191,18 @@ def write_case(
     `state/` (via `write_state_files`) is redacted. `expected` is every question id
     each key was eligible for (`expected_by_key`'s shape); `meta['model']` is the
     model the hash needs.
+
+    `task_text`, when given, is written verbatim to `case_dir/task.md` (RA-05 scope
+    item 6, fix round 2): `keys.json`'s `<change>` entry carries
+    `criterion_*_satisfied` / `criterion_*_tested` ids whenever a task was given
+    (`expected_change_questions`), and `calibrate.load_case_task` needs `task.md` on
+    disk to register those ids before it replays a labelled case -- without it,
+    `--calibrate` on a case recorded with `--task` raised `KeyError` on the first
+    `criterion_*` id it saw. This is true whether the task came from a file or a PR
+    brief (`cli._resolve_task_and_red_sha` resolves `task_text` for both); `None`
+    (no task given) writes nothing -- callers never invent a task file. A
+    file-sourced `task_text` is written with `_write_text_exact` so the round trip
+    from disk is byte-for-byte identical, not just textually equal.
     """
     model = meta['model']
     state_dir = case_dir / 'state'
@@ -200,6 +227,8 @@ def write_case(
     _write_json(state_dir / 'keys.json', keys)
     _write_text(case_dir / 'ts-review.md', review_md)
     _write_json(case_dir / 'ts-review.json', review_json)
+    if task_text is not None:
+        _write_text_exact(case_dir / 'task.md', task_text)
     # `meta['repo']` is usually already credential-free (`pipeline._repo_identity`
     # strips `http(s)://user:pass@` before this is ever called), but `redact` here
     # is the independent second guard (RA-04 fix round 1): a worktree with some

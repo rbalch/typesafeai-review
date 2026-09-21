@@ -178,6 +178,7 @@ def run(
     head: str,
     range_source: str,
     out_dir: Path,
+    task_text: str | None = None,
 ) -> int:
     """Steps 0-7 against `worktree`, diffing `base...HEAD` of `worktree` (RA-03:
     `worktree` is either the real `--worktree`, or a temporary detached worktree
@@ -195,6 +196,10 @@ def run(
     written -- the worktree root in the no-mode case, `--out` or the source repo root
     otherwise; it is never `worktree` itself when `worktree` is a temporary detached
     one, since that directory is removed before the caller ever sees the outputs.
+    `task_text` (RA-05 fix round 2) is `task`'s own source text -- the task file's
+    text for a file source, the extracted PR brief for a PR source, `None` for no
+    task -- threaded straight to `write_case` for a `--case` run; this module never
+    inspects it otherwise.
     """
     _clean_stale_outputs(out_dir)
 
@@ -252,6 +257,6 @@ def run(
             'score': review.score,
         }
         case_expected = expected_by_key(task, hunk_states, change_state)
-        write_case(args.case, hunk_states, change_state, case_expected, json_obj, md, meta)
+        write_case(args.case, hunk_states, change_state, case_expected, json_obj, md, meta, task_text)
 
     return _EXIT_BY_VERDICT[review.verdict]

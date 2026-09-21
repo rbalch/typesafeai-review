@@ -39,6 +39,7 @@ fixtures/real/<case>/
     keys.json                          {hunk_key | "<change>": {state, questions, request_key}}
   responses/                           raw recorded answers, keyed by request_key
   ts-review.md, ts-review.json         copies of the run's own outputs
+  task.md                              byte-for-byte copy of a file-sourced --task, if one was given
   meta.json                            repo, base, head, task_source, model, date, verdict, score
   labels.json                          hand-written ground truth -- RA-05's job, not written here
 ```

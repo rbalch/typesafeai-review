@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from typesafe_review import case
+from typesafe_review import calibrate, case
 from typesafe_review.cli import main
 from typesafe_review.questions import expected_change_questions, expected_hunk_questions
 from typesafe_review.slicing import slice_diff
@@ -243,3 +243,142 @@ def test_case_with_record_is_an_argparse_error(tmp_path: Path, capsys: pytest.Ca
     err = capsys.readouterr().err
     assert '--case' in err
     assert '--record' in err
+
+
+# ---------------------------------------------------------------------------
+# 4. RA-05 scope item 6: `write_case` copies the task file to `<case>/task.md`
+#    when a task was given, so `calibrate.load_case_task` can register the
+#    case's `criterion_*` ids -- without it, a real case recorded with `--task`
+#    crashed `--calibrate` with `KeyError: criterion_1_satisfied`.
+# ---------------------------------------------------------------------------
+
+_MINIMAL_TASK_MD = '---\nid: T-X\ntitle: X\n---\n\n## Acceptance\n\n- it works.\n'
+
+
+def _minimal_case_args(tmp_path: Path) -> tuple[Path, list[HunkState], ChangeState, dict, dict]:
+    hunk_state: HunkState = {
+        'task': None,
+        'file': {'path': 'pkg.py', 'language': 'python', 'is_test': False, 'is_new': False},
+        'hunk': {'header': '@@ -1 +1 @@', 'diff': '-old\n+new\n', 'after': 'new\n'},
+        'neighbours': {'same_module_helpers': [], 'tests_touching_file': []},
+        'conventions': '',
+    }
+    change_state: ChangeState = {
+        'task': None,
+        'diff_summary': [{'path': 'pkg.py', 'added': 1, 'removed': 1, 'is_test': False}],
+        'src_diff': 'diff --git a/pkg.py b/pkg.py\n',
+        'test_diff': '',
+        'acceptance_tests': '',
+    }
+    expected = {
+        case.hunk_key(hunk_state): expected_hunk_questions('python', False),
+        case.CHANGE_KEY: expected_change_questions(None),
+    }
+    meta = {
+        'repo': 'x',
+        'base': 'main',
+        'head': 'deadbeef',
+        'task_source': 'none',
+        'model': 'jev-test',
+        'date': '2026-01-01T00:00:00+00:00',
+        'verdict': 'APPROVE',
+        'score': 5,
+    }
+    return tmp_path, [hunk_state], change_state, expected, meta
+
+
+def test_write_case_with_task_text_writes_task_md_byte_equal_to_the_task_file(tmp_path: Path) -> None:
+    task_path = tmp_path / 'task.md'
+    task_path.write_text(_MINIMAL_TASK_MD)
+    with task_path.open(newline='') as f:
+        task_text = f.read()
+
+    _, hunk_states, change_state, expected, meta = _minimal_case_args(tmp_path)
+    case_dir = tmp_path / 'case-with-task'
+    case.write_case(
+        case_dir, hunk_states, change_state, expected, {'findings': [], 'counts': {}}, 'md', meta, task_text
+    )
+
+    written = case_dir / 'task.md'
+    assert written.exists()
+    assert written.read_bytes() == task_path.read_bytes()
+
+
+def test_write_case_without_task_text_writes_no_task_md(tmp_path: Path) -> None:
+    _, hunk_states, change_state, expected, meta = _minimal_case_args(tmp_path)
+    case_dir = tmp_path / 'case-without-task'
+    case.write_case(case_dir, hunk_states, change_state, expected, {'findings': [], 'counts': {}}, 'md', meta)
+
+    assert not (case_dir / 'task.md').exists()
+
+
+def test_calibrate_replays_a_real_case_recorded_with_task_and_criterion_ids(tmp_path: Path, sample) -> None:
+    """End-to-end reproduction of the boundary reviewer's finding: a `--case` run
+    with `--task` (so `keys.json`'s `<change>` entry carries `criterion_1_satisfied`
+    / `criterion_1_tested`), followed by `--calibrate` on that case, must not crash."""
+    case_dir = tmp_path / 'real-case'
+
+    rc = main(
+        [
+            '--worktree',
+            str(sample.repo),
+            '--task',
+            str(sample.task),
+            '--red-sha',
+            sample.red_sha,
+            '--base',
+            sample.base,
+            '--replay',
+            str(_REPLAY_DIR),
+            '--case',
+            str(case_dir),
+        ]
+    )
+    assert rc == EXIT_CHANGES_REQUESTED
+
+    assert (case_dir / 'task.md').read_bytes() == sample.task.read_bytes()
+    keys = json.loads((case_dir / 'state' / 'keys.json').read_text())
+    assert 'criterion_1_satisfied' in keys[case.CHANGE_KEY]['questions']
+
+    (case_dir / 'labels.json').write_text('{}')
+
+    fixtures_dir = tmp_path / 'fixtures'
+    fixtures_dir.mkdir()
+    (case_dir).rename(fixtures_dir / 'real-case')
+
+    calibrate_rc = calibrate.run(fixtures_dir)
+    assert calibrate_rc == 0
+
+
+def test_case_with_a_crlf_task_file_round_trips_task_md_byte_for_byte(sample, tmp_path: Path) -> None:
+    """`cli._resolve_task_and_red_sha` reads the task file twice: once through
+    `load_task` (universal newlines, for parsing), once through `open(newline='')`
+    (exact bytes, for `task_text`). `load_task`'s own translation means a CRLF task
+    file parses to the same `Task` as `sample.task`'s LF original -- same request
+    key, so this still replays against `_REPLAY_DIR` -- but only the `newline=''`
+    read preserves `\\r\\n` into `<case>/task.md`; a plain `open()`/`read_text()`
+    there would silently translate it away and this test would catch that."""
+    crlf_task = tmp_path / 'task-crlf.md'
+    with crlf_task.open('w', newline='') as f:
+        f.write(sample.task.read_text().replace('\n', '\r\n'))
+    assert b'\r\n' in crlf_task.read_bytes()
+
+    case_dir = tmp_path / 'case-crlf'
+    rc = main(
+        [
+            '--worktree',
+            str(sample.repo),
+            '--task',
+            str(crlf_task),
+            '--red-sha',
+            sample.red_sha,
+            '--base',
+            sample.base,
+            '--replay',
+            str(_REPLAY_DIR),
+            '--case',
+            str(case_dir),
+        ]
+    )
+    assert rc == EXIT_CHANGES_REQUESTED
+    assert (case_dir / 'task.md').read_bytes() == crlf_task.read_bytes()

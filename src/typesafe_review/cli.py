@@ -286,8 +286,9 @@ def _confirmed_commit_exists(worktree: Path, sha: str) -> bool:
 
 def _resolve_task_and_red_sha(
     worktree: Path, task_arg: str | None, red_sha_arg: str | None, pr: PullRequest | None = None
-) -> tuple[Task | None, str, str | None, str]:
-    """`(task, task_source, red_sha, red_sha_source)` for `pipeline.run` (RA-02).
+) -> tuple[Task | None, str, str | None, str, str | None]:
+    """`(task, task_source, red_sha, red_sha_source, task_text)` for `pipeline.run`
+    (RA-02; `task_text` added RA-05 fix round 2).
 
     `task_arg` a PR ref -> fetch the PR, parse its brief, and (absent `--red-sha`)
     take a red-sha out of the body if `git cat-file` confirms the commit exists in
@@ -297,17 +298,36 @@ def _resolve_task_and_red_sha(
     call (fix round 1, item 3: `--pr N` makes exactly one `gh` call). Raises
     `PRSourceError` / `TaskFileError` for the caller to turn into a stderr line and
     exit 1; never guesses past those.
+
+    `task_text` is the exact source text `task` was parsed from -- the task file's
+    own text for `task_source == 'file'`, the extracted PR brief for `'pr'`, `None`
+    for `'none'` -- so a `--case` run can hand it straight to `write_case`, which
+    writes it verbatim to `<case>/task.md` for `calibrate.load_case_task` to find
+    (without it, a case recorded with a task -- file- or PR-sourced -- that adds
+    `criterion_*` ids to `keys.json` crashes `--calibrate` with `KeyError`, since
+    nothing on disk names those ids' task). Read with `newline=''` for the file
+    case so no universal-newline translation can make the round trip to
+    `<case>/task.md` anything but byte-for-byte identical to the file on disk.
     """
     red_sha = red_sha_arg
     red_sha_source = 'flag' if red_sha_arg is not None else 'none'
 
     if task_arg is None:
-        return None, 'none', red_sha, red_sha_source
+        return None, 'none', red_sha, red_sha_source, None
 
     pr_number = parse_pr_ref(task_arg)
     if pr_number is None:
         task = load_task(Path(task_arg))
-        return task, 'file', red_sha, red_sha_source
+        try:
+            # `Path.read_text` has no `newline` parameter (only `open`/`write_text`
+            # do); `open(..., newline='')` is the only way to read without universal
+            # -newline translation, so the round trip to `<case>/task.md` stays
+            # byte-for-byte identical to the file on disk.
+            with Path(task_arg).open(newline='') as f:
+                task_text = f.read()
+        except OSError as e:
+            raise TaskFileError(f'{task_arg}: cannot read task file ({e.strerror or e})') from e
+        return task, 'file', red_sha, red_sha_source, task_text
 
     if pr is None or pr.number != pr_number:
         pr = fetch_pr(pr_number, worktree)
@@ -326,7 +346,7 @@ def _resolve_task_and_red_sha(
                     file=sys.stderr,
                 )
 
-    return task, 'pr', red_sha, red_sha_source
+    return task, 'pr', red_sha, red_sha_source, brief
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -424,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f'target: {target.source} base={target.base_sha} head={target.head_sha}', file=sys.stderr)
 
     try:
-        task, task_source, red_sha, red_sha_source = _resolve_task_and_red_sha(
+        task, task_source, red_sha, red_sha_source, task_text = _resolve_task_and_red_sha(
             worktree, args.task, args.red_sha, target.pr
         )
     except (TaskFileError, PRSourceError) as error:
@@ -446,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
                 target.head_sha,
                 target.source,
                 out_dir,
+                task_text,
             )
         except _PIPELINE_ERRORS as error:
             print(str(error), file=sys.stderr)

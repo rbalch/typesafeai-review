@@ -436,14 +436,18 @@ def test_temp_worktree_exists_during_ref_mode_run_and_is_gone_after(sample, monk
 
     real_run = pipeline_module.run
 
-    def spy_run(args, worktree, base, task, red_sha, task_source, red_sha_source, head, range_source, out_dir):
+    def spy_run(
+        args, worktree, base, task, red_sha, task_source, red_sha_source, head, range_source, out_dir, task_text=None
+    ):
         seen['worktree'] = worktree
         seen['exists'] = worktree.is_dir()
         listing = subprocess.run(
             ['git', '-C', str(sample.repo), 'worktree', 'list'], capture_output=True, text=True, check=True
         ).stdout
         seen['listing_during_run'] = listing
-        return real_run(args, worktree, base, task, red_sha, task_source, red_sha_source, head, range_source, out_dir)
+        return real_run(
+            args, worktree, base, task, red_sha, task_source, red_sha_source, head, range_source, out_dir, task_text
+        )
 
     monkeypatch.setattr('typesafe_review.cli.pipeline.run', spy_run)
     _stub_ask_all(monkeypatch)
@@ -473,7 +477,9 @@ def test_temp_worktree_is_removed_even_when_the_pipeline_raises(sample, monkeypa
     green_sha = rev_parse(sample.repo, 'HEAD')
     captured: dict[str, Any] = {}
 
-    def raising_run(args, worktree, base, task, red_sha, task_source, red_sha_source, head, range_source, out_dir):
+    def raising_run(
+        args, worktree, base, task, red_sha, task_source, red_sha_source, head, range_source, out_dir, task_text=None
+    ):
         captured['worktree'] = worktree
         raise RuntimeError('boom')
 

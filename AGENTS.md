@@ -42,6 +42,7 @@ ledger.
   builder (worktree)      acceptance tests RED → GREEN
   boundary-reviewer       live rules + architectural seams
   reviewer                red-then-green proof, correctness, tests, shape
+  ts-review + review-judge   observed, never blocks/unblocks; labels the diff
   findings → you judge → builder → re-review → APPROVE, score ≥ 4/5
   squash → push → PR to develop → triage every finding into docs/ledger-findings.md
 ```
@@ -151,6 +152,5 @@ uv run ts-review --worktree <path>        # once T-01 lands
   replaces, so it stays as the reference and the control group.
 - Distribution name is `typesafe-review`, package `typesafe_review`, directory
   `typesafeai-review`. The spec and task files use the first two.
-- **Current work:** all 11 tasks built. PRs #11 (T-09) → #12 (T-10) → #13 (T-11) are
-  stacked and await merge in that order. Next: fix `.env` `TYPESAFE_BASE_URL`, real-repo
-  manual QA (T-10), grow `fixtures/` past 8 cases before any threshold change.
+- **Current work:** all 11 `typesafeai-reviewer` tasks landed. Now on
+  `tasks/run-anywhere` — see that plan's task files for status.
