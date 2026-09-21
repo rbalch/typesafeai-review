@@ -37,6 +37,20 @@ _TIMEOUT_SECONDS = 60
 _MAX_RETRIES = 3
 
 
+def hunk_request_key(index: int) -> str:
+    """The caller's own per-state key (`RequestItem`'s first element) for one hunk's
+    request -- `pipeline.py`'s fan-out builds it, `compose.py` (RA-06) recomputes it
+    to recognise a skipped hunk by index. One definition here, the module that
+    already owns `RequestItem` and this key concept, rather than a copy in each of
+    the two callers."""
+    return f'hunk-{index}'
+
+
+#: The caller's own per-state key for the one change-wide request. See
+#: `hunk_request_key` for why this lives here.
+CHANGE_REQUEST_KEY = 'change'
+
+
 def request_key(state: JSONContent, questions: Mapping[str, Question], model: str) -> str:
     """The record/replay key for one request: `sha256(canonical_json({state, questions, model}))`.
 

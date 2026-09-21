@@ -17,13 +17,14 @@ below sits inside a `try`.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 from typesafe_sdk import JSONContent
 
-from typesafe_review.ask import Record, Recorder
+from typesafe_review.ask import CHANGE_REQUEST_KEY, Record, Recorder, hunk_request_key
 from typesafe_review.ask import request_key as ask_request_key
 from typesafe_review.checks import redact
 from typesafe_review.questions import (
@@ -33,7 +34,7 @@ from typesafe_review.questions import (
     expected_hunk_questions,
     send_questions,
 )
-from typesafe_review.state import ChangeState, HunkState
+from typesafe_review.state import MAX_REQUEST_TOKENS, ChangeState, HunkState
 from typesafe_review.taskfile import Task
 
 __all__ = [
@@ -181,6 +182,8 @@ def write_case(
     review_md: str,
     meta: dict[str, Any],
     task_text: str | None = None,
+    *,
+    skipped: Sequence[tuple[str, int]] = (),
 ) -> None:
     """Write one real-run case under `case_dir` (RA-04 item 1).
 
@@ -203,14 +206,26 @@ def write_case(
     (no task given) writes nothing -- callers never invent a task file. A
     file-sourced `task_text` is written with `_write_text_exact` so the round trip
     from disk is byte-for-byte identical, not just textually equal.
+
+    `skipped` is `pipeline._build_requests`'s own `(key, estimate)` list (RA-06,
+    fix round 1 item 5), keyed by `ask.hunk_request_key`/`CHANGE_REQUEST_KEY` --
+    `pipeline.py`'s own per-request key space, not `keys.json`'s `hunk_key`/
+    `CHANGE_KEY` one. A key in it was never sent, so it is omitted from
+    `keys.json` entirely (there is no `request_key` to hash, and no `responses/`
+    entry to point at) and recorded instead under `meta.json`'s own `"skipped"`
+    list, same shape as `ts-review.json`'s -- a later `--calibrate` on this case
+    sees a state that was skipped, not a state that silently has no answer.
     """
     model = meta['model']
     state_dir = case_dir / 'state'
     write_state_files(state_dir, hunk_states, change_state)
 
+    skipped_keys = {key for key, _ in skipped}
     keys: dict[str, dict[str, Any]] = {}
 
     for i, hunk_state in enumerate(hunk_states, start=1):
+        if hunk_request_key(i - 1) in skipped_keys:
+            continue
         key = hunk_key(hunk_state)
         if key not in expected:
             raise CaseError(f'{case_dir}: no expected questions for hunk {key!r}')
@@ -218,19 +233,31 @@ def write_case(
         req_key = ask_request_key(cast(JSONContent, dict(hunk_state)), send_questions(questions), model)
         keys[key] = {'state': f'hunk-{i:02d}.json', 'questions': list(questions), 'request_key': req_key}
 
-    if CHANGE_KEY not in expected:
-        raise CaseError(f'{case_dir}: no expected questions for {CHANGE_KEY!r}')
-    change_questions = expected[CHANGE_KEY]
-    change_req_key = ask_request_key(cast(JSONContent, dict(change_state)), send_questions(change_questions), model)
-    keys[CHANGE_KEY] = {'state': 'change.json', 'questions': list(change_questions), 'request_key': change_req_key}
+    if CHANGE_REQUEST_KEY not in skipped_keys:
+        if CHANGE_KEY not in expected:
+            raise CaseError(f'{case_dir}: no expected questions for {CHANGE_KEY!r}')
+        change_questions = expected[CHANGE_KEY]
+        change_req_key = ask_request_key(cast(JSONContent, dict(change_state)), send_questions(change_questions), model)
+        keys[CHANGE_KEY] = {
+            'state': 'change.json',
+            'questions': list(change_questions),
+            'request_key': change_req_key,
+        }
 
     _write_json(state_dir / 'keys.json', keys)
     _write_text(case_dir / 'ts-review.md', review_md)
     _write_json(case_dir / 'ts-review.json', review_json)
     if task_text is not None:
         _write_text_exact(case_dir / 'task.md', task_text)
+
+    meta_with_skipped = {
+        **meta,
+        'skipped': [
+            {'key': key, 'estimated_tokens': estimate, 'budget': MAX_REQUEST_TOKENS} for key, estimate in skipped
+        ],
+    }
     # `meta['repo']` is usually already credential-free (`pipeline._repo_identity`
     # strips `http(s)://user:pass@` before this is ever called), but `redact` here
     # is the independent second guard (RA-04 fix round 1): a worktree with some
     # other credentialed remote shape, or a future `meta` field, still can't leak.
-    _write_json(case_dir / 'meta.json', _redact_value(meta))
+    _write_json(case_dir / 'meta.json', _redact_value(meta_with_skipped))

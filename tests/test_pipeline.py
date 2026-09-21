@@ -20,9 +20,11 @@ from pathlib import Path
 
 import pytest
 
-from typesafe_review import calibrate
+from typesafe_review import calibrate, pipeline
+from typesafe_review.ask import Recorder, Replay
 from typesafe_review.cli import main
 from typesafe_review.questions import CHANGE_KEY, expected_change_questions
+from typesafe_review.state import MAX_REQUEST_TOKENS, ChangeState, HunkState
 from typesafe_review.taskfile import parse_task
 from typesafe_review.verdict import EXIT_APPROVE, EXIT_CHANGES_REQUESTED, EXIT_NEEDS_HUMAN, EXIT_TOOL_FAILURE
 
@@ -259,6 +261,186 @@ def test_replay_miss_exits_1_and_leaves_no_outputs(sample, tmp_path: Path) -> No
     assert rc == EXIT_TOOL_FAILURE
     assert not (sample.repo / 'ts-review.md').exists()
     assert not (sample.repo / 'ts-review.json').exists()
+
+
+# ---------------------------------------------------------------------------
+# RA-06: a request whose estimate exceeds `MAX_REQUEST_TOKENS` never reaches the
+# recorder at all -- it is composed as `NEEDS_HUMAN` / `state_too_large` in code,
+# never sent and never a 400.
+# ---------------------------------------------------------------------------
+
+
+def _make_hunk_state(diff_padding: int = 0) -> HunkState:
+    diff = '@@ -1,1 +1,1 @@ def f\n-old\n+new\n'
+    if diff_padding:
+        diff = diff + ('x' * diff_padding)
+    return {
+        'task': None,
+        'file': {'path': 'src/pkg/mod.py', 'language': 'python', 'is_test': False, 'is_new': False},
+        'hunk': {'header': '@@ -1,1 +1,1 @@ def f', 'diff': diff, 'after': 'def f():\n    return new\n'},
+        'neighbours': {'same_module_helpers': [], 'tests_touching_file': []},
+        'conventions': '',
+    }
+
+
+def _make_change_state(src_diff_padding: int = 0) -> ChangeState:
+    src_diff = 'small src diff'
+    if src_diff_padding:
+        src_diff = src_diff + ('x' * src_diff_padding)
+    return {
+        'task': None,
+        'diff_summary': [],
+        'src_diff': src_diff,
+        'test_diff': '',
+        'acceptance_tests': '',
+    }
+
+
+def test_build_requests_skips_a_hunk_state_over_the_token_budget() -> None:
+    small_hunk = _make_hunk_state()
+    # `MAX_REQUEST_TOKENS * 4` bytes of padding alone estimates to roughly
+    # `MAX_REQUEST_TOKENS` tokens; doubling it clears the budget with margin.
+    huge_hunk = _make_hunk_state(diff_padding=MAX_REQUEST_TOKENS * 4 * 2)
+    change_state = _make_change_state()
+
+    requests, skipped = pipeline._build_requests(None, [small_hunk, huge_hunk], change_state)
+
+    assert {key for key, _, _ in requests} == {'hunk-0', 'change'}
+    assert len(skipped) == 1
+    skipped_key, estimate = skipped[0]
+    assert skipped_key == 'hunk-1'
+    assert estimate > MAX_REQUEST_TOKENS
+
+
+def test_build_requests_skips_a_change_state_over_the_token_budget_hunks_unaffected() -> None:
+    small_hunk = _make_hunk_state()
+    huge_change = _make_change_state(src_diff_padding=MAX_REQUEST_TOKENS * 4 * 2)
+
+    requests, skipped = pipeline._build_requests(None, [small_hunk], huge_change)
+
+    assert {key for key, _, _ in requests} == {'hunk-0'}
+    assert len(skipped) == 1
+    skipped_key, estimate = skipped[0]
+    assert skipped_key == 'change'
+    assert estimate > MAX_REQUEST_TOKENS
+
+
+class _CountingRecorder:
+    """Wraps a real `Recorder`, remembering every `hunk_key` `ask_all` asked it to
+    load -- a skipped request must never show up here at all, since it never
+    reaches `ask_all`."""
+
+    def __init__(self, inner: Recorder) -> None:
+        self._inner = inner
+        self.hunk_keys_seen: list[str] = []
+
+    def load(self, key: str, hunk_key: str) -> bytes | None:
+        self.hunk_keys_seen.append(hunk_key)
+        return self._inner.load(key, hunk_key)
+
+    def save(self, key: str, body: bytes) -> None:
+        self._inner.save(key, body)
+
+
+def test_hunk_over_budget_is_never_sent_and_run_reports_state_too_large(
+    sample, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_build_hunk_states = pipeline.build_hunk_states
+
+    def _padded_build_hunk_states(task, change, conventions):
+        states = real_build_hunk_states(task, change, conventions)
+        # Pad the first hunk's diff well past `MAX_REQUEST_TOKENS` while staying
+        # far below `MAX_HUNK_STATE_BYTES` (1 MiB) -- exactly the "below the hard
+        # cap, over the soft budget" case this task exists for.
+        padded_first: HunkState = {
+            **states[0],
+            'hunk': {**states[0]['hunk'], 'diff': states[0]['hunk']['diff'] + ('x' * 40000)},
+        }
+        return [padded_first, *states[1:]]
+
+    monkeypatch.setattr(pipeline, 'build_hunk_states', _padded_build_hunk_states)
+
+    counting = _CountingRecorder(Replay(_REPLAY_DIR))
+    monkeypatch.setattr(pipeline, 'resolve_recorder', lambda args: counting)
+
+    rc = main(
+        [
+            '--worktree',
+            str(sample.repo),
+            '--task',
+            str(sample.task),
+            '--red-sha',
+            sample.red_sha,
+            '--base',
+            sample.base,
+            '--replay',
+            str(_REPLAY_DIR),
+        ]
+    )
+
+    assert rc == EXIT_NEEDS_HUMAN
+    # The counting fake proves the padded hunk's request was never handed to the
+    # recorder -- `_build_requests` filtered it out before `ask_all` ran.
+    assert 'hunk-0' not in counting.hunk_keys_seen
+
+    md, data = _read_outputs(sample.repo)
+    assert data['verdict'] == 'NEEDS_HUMAN'
+    assert data['stop_reason'] == 'state_too_large'
+    assert len(data['skipped']) == 1
+    skipped_entry = data['skipped'][0]
+    assert skipped_entry['key'] == 'hunk-0'
+    assert skipped_entry['budget'] == MAX_REQUEST_TOKENS
+    assert skipped_entry['estimated_tokens'] > MAX_REQUEST_TOKENS
+    assert 'hunk-0' in md
+    assert str(MAX_REQUEST_TOKENS) in md
+
+
+def test_change_state_over_budget_is_never_sent_while_hunk_requests_still_go_out(
+    sample, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_build_change_state = pipeline.build_change_state
+
+    def _padded_build_change_state(task, change, acceptance_tests):
+        state = real_build_change_state(task, change, acceptance_tests)
+        return {**state, 'src_diff': state['src_diff'] + ('x' * 40000)}
+
+    monkeypatch.setattr(pipeline, 'build_change_state', _padded_build_change_state)
+
+    counting = _CountingRecorder(Replay(_REPLAY_DIR))
+    monkeypatch.setattr(pipeline, 'resolve_recorder', lambda args: counting)
+
+    rc = main(
+        [
+            '--worktree',
+            str(sample.repo),
+            '--task',
+            str(sample.task),
+            '--red-sha',
+            sample.red_sha,
+            '--base',
+            sample.base,
+            '--replay',
+            str(_REPLAY_DIR),
+        ]
+    )
+
+    assert rc == EXIT_NEEDS_HUMAN
+    assert 'change' not in counting.hunk_keys_seen
+    # Hunk requests were unaffected: both still went to the recorder.
+    assert 'hunk-0' in counting.hunk_keys_seen
+    assert 'hunk-1' in counting.hunk_keys_seen
+
+    _, data = _read_outputs(sample.repo)
+    assert data['stop_reason'] == 'state_too_large'
+    assert len(data['skipped']) == 1
+    skipped_entry = data['skipped'][0]
+    assert skipped_entry['key'] == 'change'
+    assert skipped_entry['budget'] == MAX_REQUEST_TOKENS
+    assert skipped_entry['estimated_tokens'] > MAX_REQUEST_TOKENS
+    # The hunk findings this fixture always fires still made it through untouched.
+    finding_ids = {f['question_id'] for f in data['findings']}
+    assert 'swallows_exception' in finding_ids
+    assert 'missing_type_hints_public' in finding_ids
 
 
 def test_stale_outputs_removed_before_a_failing_run(sample, tmp_path: Path) -> None:

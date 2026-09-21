@@ -21,6 +21,16 @@ from typesafe_review.taskfile import Task
 #: truncating harder), never something to send anyway.
 MAX_HUNK_STATE_BYTES = 1024 * 1024
 
+#: RA-06: the soft per-request budget `pipeline._build_requests` checks before
+#: sending anything to Jev. Measured, not guessed (2026-09-18 repro,
+#: tasks/run-anywhere/RA-06-state-budget.md Context): the largest recorded
+#: successful request was 2,842 input tokens; the same run's change-wide state with
+#: `acceptance_tests` holding an untruncated `tests/` dump was ~49,265 tokens and
+#: got `400 {"error_type":"max_tokens_exceeded"}`. 8,000 is a first calibration
+#: point comfortably above the largest known success and well below the known
+#: failure -- to be revisited once `docs/runs.md` has more rows.
+MAX_REQUEST_TOKENS = 8000
+
 # spec §4.2: conventions are exactly these three `AGENTS.md` sections, in this order,
 # verbatim, joined with a blank line. A missing section contributes nothing.
 _CONVENTION_HEADINGS = ('## Architectural shape', '## Always', '## Never')
@@ -148,21 +158,74 @@ def _run_git(worktree: Path, args: list[str]) -> bytes:
     return result.stdout
 
 
+#: The tree git diffs a root commit (no parent) against: `git hash-object -t tree
+#: /dev/null`, the same well-known empty-tree sha `git diff --root` / GitHub both use.
+#: (RA-06 brief context: the brief itself quotes this sha with one extra `0` --
+#: `4b825dc642cb6eb9a0060e54bf8d69288fbee4904`, 41 hex chars, not a valid SHA-1;
+#: this is the actual 40-char value `git hash-object -t tree /dev/null` prints.)
+_EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+
+def _parent_ref(worktree: Path, red_sha: str) -> str:
+    """`<red_sha>^`, or `_EMPTY_TREE_SHA` if `red_sha` has no parent (a root
+    commit). `rev-parse --verify` failing here is an expected "no parent" signal,
+    not a git failure, so unlike `_run_git` a nonzero exit never raises."""
+    cmd = ['git', '-C', str(worktree), 'rev-parse', '--verify', f'{red_sha}^']
+    try:
+        result = subprocess.run(cmd, capture_output=True, check=False)
+    except OSError as e:
+        raise StateError(f'failed to run `{" ".join(cmd)}`: {e}') from e
+    if result.returncode == 0:
+        return f'{red_sha}^'
+    return _EMPTY_TREE_SHA
+
+
+def _added_python_lines(diff_text: str) -> str:
+    """Every `+` line of every `*.py` file in a unified diff, grouped back per file
+    and joined with a blank line -- `__init__.py` and any path under a `fixtures/`
+    directory contribute nothing. Parses only `+++ b/<path>` headers to decide which
+    file the following `+` lines belong to (never `diff --git`, whose two paths are
+    ambiguous to split on a renamed/spaced path) and strips a trailing tab off that
+    header before reading the path (ledger F-5: `git diff` appends a tab when the
+    path needs quoting)."""
+    per_file: list[str] = []
+    current_lines: list[str] | None = None
+
+    def _flush() -> None:
+        if current_lines:
+            per_file.append('\n'.join(current_lines))
+
+    for line in diff_text.splitlines():
+        if line.startswith('+++ '):
+            _flush()
+            current_lines = None
+            raw_path = line[len('+++ ') :].split('\t', 1)[0]
+            if raw_path == '/dev/null':
+                continue
+            path = raw_path.removeprefix('b/')
+            if path.endswith('.py') and Path(path).name != '__init__.py' and 'fixtures/' not in path:
+                current_lines = []
+            continue
+        if current_lines is not None and line.startswith('+') and not line.startswith('+++'):
+            current_lines.append(line[1:])
+    _flush()
+    return '\n\n'.join(per_file)
+
+
 def load_acceptance_tests(worktree: Path, red_sha: str | None) -> str:
-    """Whole contents of every file under `tests/` as it read at `red_sha`, joined
-    with a blank line. No red sha → `""` (spec §4.2 item 3).
+    """The red commit's own diff under `tests/`, restricted to added/modified lines
+    of `*.py` files (spec §4.2 item 3, §4.3: "the test functions committed at
+    red-sha"). No red sha → `""`. Fixtures, data files and `__init__.py` never
+    contribute, and a file the red commit never touched never appears at all --
+    unlike the whole-file dump this replaced, `acceptance_tests` here can never be
+    bigger than the red commit's own diff.
     """
     if red_sha is None:
         return ''
 
-    listing = _run_git(worktree, ['ls-tree', '-r', '--name-only', '-z', red_sha, '--', 'tests/'])
-    paths = [p for p in listing.decode('utf-8', errors='replace').split('\0') if p]
-
-    contents: list[str] = []
-    for path in paths:
-        raw = _run_git(worktree, ['show', f'{red_sha}:{path}'])
-        contents.append(raw.decode('utf-8', errors='replace'))
-    return '\n\n'.join(contents)
+    parent = _parent_ref(worktree, red_sha)
+    raw = _run_git(worktree, ['diff', parent, red_sha, '--', 'tests/'])
+    return _added_python_lines(raw.decode('utf-8', errors='replace'))
 
 
 def _task_state(task: Task | None) -> TaskState | None:

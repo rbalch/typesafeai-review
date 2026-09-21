@@ -19,6 +19,7 @@ import typesafe_review.state as state_module
 from typesafe_review.slicing import Change, FileSummary, Hunk, Neighbours
 from typesafe_review.state import (
     MAX_HUNK_STATE_BYTES,
+    MAX_REQUEST_TOKENS,
     StateError,
     build_change_state,
     build_hunk_states,
@@ -81,6 +82,12 @@ def commit(repo: Path, message: str) -> str:
     _git(repo, 'commit', '-q', '-m', message)
     result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repo, check=True, capture_output=True)
     return result.stdout.decode().strip()
+
+
+def test_max_request_tokens_is_the_calibrated_8000_budget():
+    # RA-06 Context: largest recorded success 2,842 input tokens, failing T-11
+    # request ~49K (2026-09-18 repro) -- 8,000 is the first calibration point.
+    assert MAX_REQUEST_TOKENS == 8000
 
 
 def test_hunk_state_keys_match_spec_shape_exactly():
@@ -169,6 +176,100 @@ def test_load_acceptance_tests_reads_test_files_at_red_sha(tmp_path: Path):
     assert 'unchanged' not in acceptance_tests
 
 
+# --- RA-06: `acceptance_tests` is the red commit's diff, not whole-file dumps -----
+
+
+def test_load_acceptance_tests_holds_only_the_red_commits_added_lines(tmp_path: Path):
+    """The red commit adds a new test function to an *existing* test file; only the
+    lines it actually added show up, never the file's pre-existing content."""
+    repo = make_repo(tmp_path)
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'test_thing.py').write_text('def test_existing():\n    assert True\n')
+    commit(repo, 'base: existing test file')
+
+    (repo / 'tests' / 'test_thing.py').write_text(
+        'def test_existing():\n    assert True\n\n\ndef test_new_behaviour():\n    assert 1 == 1\n'
+    )
+    red_sha = commit(repo, 'red: acceptance test for new behaviour')
+
+    acceptance_tests = load_acceptance_tests(repo, red_sha)
+
+    assert 'def test_new_behaviour' in acceptance_tests
+    assert 'assert 1 == 1' in acceptance_tests
+    assert 'def test_existing' not in acceptance_tests
+
+
+def test_load_acceptance_tests_pins_exact_text_for_a_modified_paired_line(tmp_path: Path):
+    """Fix round 1 item 1: the red commit *modifies* an existing test function's
+    assertion (a paired `-`/`+` line, not a pure addition). The returned text is
+    pinned exactly: the replacement `+` line's content, and nothing of the removed
+    `-` line. A mutant that also collects `-` lines (e.g. `line.startswith(('+',
+    '-'))` instead of just `+`) would put `assert old_value` in the result too --
+    this assertion catches that; ledger F-10 asks for the literal, not a substring
+    check, precisely so a mutation like that cannot slip through as "well, the new
+    line is *also* in there"."""
+    repo = make_repo(tmp_path)
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'test_thing.py').write_text('def test_thing():\n    assert old_value\n')
+    commit(repo, 'base: existing assertion')
+
+    (repo / 'tests' / 'test_thing.py').write_text('def test_thing():\n    assert new_value\n')
+    red_sha = commit(repo, 'red: modify the existing assertion')
+
+    acceptance_tests = load_acceptance_tests(repo, red_sha)
+
+    assert acceptance_tests == '    assert new_value'
+    assert 'old_value' not in acceptance_tests
+
+
+def test_load_acceptance_tests_drops_fixture_and_init_and_non_python_files(tmp_path: Path):
+    """A red commit that adds one test function and also touches a fixture file
+    under `tests/fixtures/`, an `__init__.py`, and a non-`.py` data file: only the
+    test function's added lines land in `acceptance_tests`."""
+    repo = make_repo(tmp_path)
+    (repo / 'tests' / 'fixtures').mkdir(parents=True)
+    (repo / 'tests' / '__init__.py').write_text('')
+    (repo / 'tests' / 'fixtures' / 'sample.json').write_text('{}\n')
+    (repo / 'tests' / 'test_new.py').write_text('def test_new_thing():\n    assert True\n')
+    red_sha = commit(repo, 'red: adds test, fixture, init and data file all at once')
+
+    acceptance_tests = load_acceptance_tests(repo, red_sha)
+
+    assert 'def test_new_thing' in acceptance_tests
+    assert '{}' not in acceptance_tests
+    assert 'sample.json' not in acceptance_tests
+
+
+def test_load_acceptance_tests_root_commit_diffs_against_the_empty_tree(tmp_path: Path):
+    """A red commit with no parent (the repo's very first commit) still produces a
+    diff -- against the empty tree -- rather than failing on `sha^`."""
+    repo = make_repo(tmp_path)
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'test_root.py').write_text('def test_root_case():\n    assert True\n')
+    red_sha = commit(repo, 'red: first commit in the repo is the red commit')
+
+    acceptance_tests = load_acceptance_tests(repo, red_sha)
+
+    assert 'def test_root_case' in acceptance_tests
+
+
+def test_load_acceptance_tests_omits_files_untouched_by_the_red_commit(tmp_path: Path):
+    """A pre-existing test file the red commit never touches contributes nothing,
+    even though it exists in the tree at the red commit."""
+    repo = make_repo(tmp_path)
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'test_untouched.py').write_text('def test_untouched():\n    assert True\n')
+    commit(repo, 'base: unrelated pre-existing test file')
+
+    (repo / 'tests' / 'test_new.py').write_text('def test_added_by_red():\n    assert True\n')
+    red_sha = commit(repo, 'red: only adds a new file')
+
+    acceptance_tests = load_acceptance_tests(repo, red_sha)
+
+    assert 'def test_added_by_red' in acceptance_tests
+    assert 'test_untouched' not in acceptance_tests
+
+
 # --- fix round 1, finding 2: StateError branches ---------------------------------
 
 
@@ -182,7 +283,7 @@ def test_load_acceptance_tests_with_bogus_red_sha_raises_state_error_naming_the_
 
     message = str(exc_info.value)
     assert 'git' in message
-    assert 'ls-tree' in message
+    assert 'diff' in message
 
 
 def test_load_conventions_with_unreadable_agents_md_raises_state_error_not_raw_oserror(tmp_path: Path):
