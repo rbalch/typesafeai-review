@@ -354,7 +354,7 @@ def test_hunk_over_budget_is_never_sent_and_run_reports_state_too_large(
         # cap, over the soft budget" case this task exists for.
         padded_first: HunkState = {
             **states[0],
-            'hunk': {**states[0]['hunk'], 'diff': states[0]['hunk']['diff'] + ('x' * 40000)},
+            'hunk': {**states[0]['hunk'], 'diff': states[0]['hunk']['diff'] + ('x' * (MAX_REQUEST_TOKENS * 4 * 2))},
         }
         return [padded_first, *states[1:]]
 
@@ -402,7 +402,7 @@ def test_change_state_over_budget_is_never_sent_while_hunk_requests_still_go_out
 
     def _padded_build_change_state(task, change, acceptance_tests):
         state = real_build_change_state(task, change, acceptance_tests)
-        return {**state, 'src_diff': state['src_diff'] + ('x' * 40000)}
+        return {**state, 'src_diff': state['src_diff'] + ('x' * (MAX_REQUEST_TOKENS * 4 * 2))}
 
     monkeypatch.setattr(pipeline, 'build_change_state', _padded_build_change_state)
 

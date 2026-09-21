@@ -22,14 +22,27 @@ from typesafe_review.taskfile import Task
 MAX_HUNK_STATE_BYTES = 1024 * 1024
 
 #: RA-06: the soft per-request budget `pipeline._build_requests` checks before
-#: sending anything to Jev. Measured, not guessed (2026-09-18 repro,
-#: tasks/run-anywhere/RA-06-state-budget.md Context): the largest recorded
-#: successful request was 2,842 input tokens; the same run's change-wide state with
-#: `acceptance_tests` holding an untruncated `tests/` dump was ~49,265 tokens and
-#: got `400 {"error_type":"max_tokens_exceeded"}`. 8,000 is a first calibration
-#: point comfortably above the largest known success and well below the known
-#: failure -- to be revisited once `docs/runs.md` has more rows.
-MAX_REQUEST_TOKENS = 8000
+#: sending anything to Jev, in `pipeline._estimate_tokens` units (bytes / 4).
+#: Measured, not guessed. 2026-09-18 repro (tasks/run-anywhere/RA-06-state-budget.md
+#: Context): largest recorded success 2,842 input tokens; an untruncated `tests/`
+#: dump at ~49,265 tokens got `400 {"error_type":"max_tokens_exceeded"}`. The
+#: first calibration point, 8,000, skipped PR #15's change-wide request (13,410
+#: estimated) and `hunk-27` (8,597), so 2026-09-21 probed the ceiling with one
+#: Noul against a padded state, `usage.input_tokens` from each success:
+#:
+#:   padding          estimated  result  input_tokens
+#:   real PR-15 diff     13,513  ok            15,557
+#:   real PR-15 diff     16,501  ok            19,059
+#:   real PR-15 diff     25,008  ok            28,767
+#:   real PR-15 diff     29,010  400 max_tokens_exceeded
+#:   synthetic numeric   15,014  ok            29,540
+#:   synthetic numeric   18,003  400 max_tokens_exceeded
+#:
+#: So the API caps a request at roughly 32K real input tokens, and the bytes/4
+#: estimate undercounts by ~1.15x on real code and ~2x on number-heavy text.
+#: 16,000 keeps the worst measured ratio (16,000 x 2 = 32K) at the ceiling and
+#: real code (~18.4K) well under it, while clearing every request PR #15 needs.
+MAX_REQUEST_TOKENS = 16000
 
 # spec §4.2: conventions are exactly these three `AGENTS.md` sections, in this order,
 # verbatim, joined with a blank line. A missing section contributes nothing.

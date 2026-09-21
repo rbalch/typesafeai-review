@@ -84,10 +84,12 @@ def commit(repo: Path, message: str) -> str:
     return result.stdout.decode().strip()
 
 
-def test_max_request_tokens_is_the_calibrated_8000_budget():
-    # RA-06 Context: largest recorded success 2,842 input tokens, failing T-11
-    # request ~49K (2026-09-18 repro) -- 8,000 is the first calibration point.
-    assert MAX_REQUEST_TOKENS == 8000
+def test_max_request_tokens_is_the_calibrated_16000_budget():
+    # 2026-09-21 probe (see the constant's comment): the API caps a request at
+    # ~32K real input tokens; bytes/4 undercounts by ~1.15x on real code and ~2x
+    # on number-heavy text, so 16,000 x 2 sits at the ceiling and real code well
+    # under it, while PR #15's 13,410-token change request clears the budget.
+    assert MAX_REQUEST_TOKENS == 16000
 
 
 def test_hunk_state_keys_match_spec_shape_exactly():
