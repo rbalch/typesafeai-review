@@ -20,10 +20,11 @@ from pathlib import Path
 
 import pytest
 
+from typesafe_review import calibrate
 from typesafe_review.cli import main
-from typesafe_review.questions import expected_change_questions
+from typesafe_review.questions import CHANGE_KEY, expected_change_questions
 from typesafe_review.taskfile import parse_task
-from typesafe_review.verdict import EXIT_CHANGES_REQUESTED, EXIT_NEEDS_HUMAN, EXIT_TOOL_FAILURE
+from typesafe_review.verdict import EXIT_APPROVE, EXIT_CHANGES_REQUESTED, EXIT_NEEDS_HUMAN, EXIT_TOOL_FAILURE
 
 _BUILD_REPO_PATH = Path(__file__).parent / 'fixtures' / 'repos' / 'sample' / 'build_repo.py'
 _REPLAY_DIR = Path(__file__).parent / 'fixtures' / 'responses' / 'pipeline_sample'
@@ -282,3 +283,71 @@ def test_stale_outputs_removed_before_a_failing_run(sample, tmp_path: Path) -> N
     assert rc == EXIT_TOOL_FAILURE
     assert not (sample.repo / 'ts-review.md').exists()
     assert not (sample.repo / 'ts-review.json').exists()
+
+
+# ---------------------------------------------------------------------------
+# RA-05 fix round 2: a PR-sourced `--task` still has no file on disk, so
+# `write_case` must copy the *extracted brief text* (not a file path) to
+# `<case>/task.md` -- without it, `keys.json`'s `<change>` entry carries
+# `criterion_1_satisfied`/`criterion_1_tested` (the PR brief has one acceptance
+# bullet, same as the sample repo's own task.md) and `--calibrate` on the
+# resulting case crashed with `KeyError: 'criterion_1_satisfied'`, exactly as it
+# did for a file-sourced `--task` before fix round 1.
+# ---------------------------------------------------------------------------
+
+#: `extract_brief` on `_brief_body(sample.task.read_text())`, pinned as a literal
+#: (not computed via `extract_brief` here) so this test does not validate the
+#: production code against itself.
+_EXPECTED_PR_BRIEF_TEXT = (
+    '---\n'
+    'id: T-SAMPLE\n'
+    'title: Fix thing() and report success safely\n'
+    '---\n'
+    '\n'
+    '## Goal\n'
+    '\n'
+    'Make `thing()` return `True`.\n'
+    '\n'
+    '## Acceptance\n'
+    '\n'
+    '- `thing()` returns `True`.'
+)
+
+
+def test_pr_sourced_case_writes_task_md_from_the_brief_and_calibrate_accepts_it(
+    sample, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task_text = sample.task.read_text()
+    body = _brief_body(task_text)
+    _stub_gh(monkeypatch, body)
+
+    case_dir = tmp_path / 'pr-case'
+    rc = main(
+        [
+            '--worktree',
+            str(sample.repo),
+            '--task',
+            '13',
+            '--red-sha',
+            sample.red_sha,
+            '--base',
+            sample.base,
+            '--replay',
+            str(_REPLAY_DIR),
+            '--case',
+            str(case_dir),
+        ]
+    )
+    assert rc == EXIT_CHANGES_REQUESTED
+
+    assert (case_dir / 'task.md').read_text() == _EXPECTED_PR_BRIEF_TEXT
+
+    keys = json.loads((case_dir / 'state' / 'keys.json').read_text())
+    assert 'criterion_1_satisfied' in keys[CHANGE_KEY]['questions']
+
+    (case_dir / 'labels.json').write_text('{}')
+    fixtures_dir = tmp_path / 'fixtures'
+    fixtures_dir.mkdir()
+    case_dir.rename(fixtures_dir / 'pr-case')
+
+    assert calibrate.run(fixtures_dir) == EXIT_APPROVE

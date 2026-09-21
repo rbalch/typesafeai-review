@@ -65,6 +65,10 @@ target/
 # Build-loop review artifacts — per-round scratch, never committed
 review.md
 review.json
+# ts-review's own outputs, anchored to the reviewed root: a `fixtures/real/<case>/`
+# copy (case.write_case) is a committed fixture, not scratch, and must stay tracked.
+/ts-review.md
+/ts-review.json
 
 # agent worktrees — orchestrate creates these; they are checkouts, not content
 .claude/worktrees/

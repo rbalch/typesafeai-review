@@ -184,6 +184,26 @@ score out of 5.
 **A boundary finding citing a `DEC-N` is blocking, always.** CI will fail on it regardless
 of what anyone scores it.
 
+## 2b. `ts-review` + `review-judge` — the observed reviewer
+
+After both reviewers return, from the root checkout:
+
+```bash
+uv run ts-review --worktree <wt> --task <task-file> --red-sha <sha> --case fixtures/real/<task-id>
+```
+
+Record the exit code in your own notes. **`ts-review`'s verdict never blocks or
+unblocks the loop** — the LLM reviewer still decides, full stop, this phase. The run is
+observed, not consulted.
+
+Then dispatch `subagent_type: review-judge`, `model: sonnet`, in the builder's
+worktree. Brief: the worktree path, the task file's absolute path, and the case
+directory the `--case` run just wrote (`fixtures/real/<task-id>`). The judge labels the
+diff itself — never either review's findings — and writes exactly two things:
+`<case>/labels.json` and one row appended to `docs/review-comparisons.md`. Neither
+file is gitignored; both are committed with the task's squash (step 4), alongside the
+builder's own commits.
+
 ## 3. The loop — you in the middle
 
 ```
@@ -216,7 +236,9 @@ while verdict != APPROVE or score < 4 or blocking/important findings remain:
 
 On approval, in the worktree, by you or by the builder under your instruction:
 
-1. `make check` green, tree clean.
+1. `make check` green, tree clean except the `review-judge` output from step 2b
+   (`<case>/labels.json`, `docs/review-comparisons.md`) — stage those alongside the
+   builder's own changes before the squash.
 2. **Squash to one commit.** `git reset --soft $(git merge-base develop HEAD)` then one
    commit. Subject `<type>(<id>): <title>`. The body is **bullets, not prose, hard cap
    15 lines**, in exactly this shape:
@@ -228,9 +250,14 @@ On approval, in the worktree, by you or by the builder under your instruction:
    Watch out:
    - up to 3 bullets, only for things a reader would not guess; omit the section if none
    Evidence: <N> tests in <file>, make check exit 0, red-then-green on <sha>
+   Red: <sha>
    Check by hand:
    - anything the human should verify or decide
    ```
+
+   `Red: <sha>` is the same acceptance-test commit SHA as in `Evidence`, on its own
+   line so `prsource.extract_red_sha` can parse it back out of a future `--task <PR>`
+   run without scraping prose.
 
    The review rounds, the fix history, and the story of how a bug was found do not go
    here. That belongs in `docs/ledger-findings.md`, which already has it. If a bullet
