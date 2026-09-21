@@ -404,6 +404,39 @@ and forcing a harness observation into one loses what makes it interesting.
 - **Date:** 2026-09-21 (RA-05)
 - After round 3's commit the builder found `HEAD detached from c05f218` with no checkout of its own; it moved the branch to the commit and reattached. Cause unknown (a `git stash apply` in round 2 is the only unusual command). One sighting; watch for it.
 
+### F-10 — sighting 5 (2026-09-21, RA-06)
+- No test held a genuinely modified line (paired `-`/`+`); collecting `-` lines too survived all 16 tests. And a `test_case.py` assertion was rewritten to compare `responses/` against the same run's `keys.json`, both from `ask.request_key`, so a recorder/key mismatch could not fail. Both fixed with literals (the exact returned text; the three known fixture hashes). Reviewer found both by mutation. Still the candidate control from sighting 3; a test that derives its expectation from the module under test.
+
+### F-17 — sighting 2 (2026-09-21, RA-06)
+- The `test_case.py` rewrite above was a fix-round edit that loosened an assertion the fix did not need loosened (the directory gained an unrelated fixture; the honest fix was a literal subset, not self-comparison).
+
+### F-33 — sighting 2 (2026-09-21, RA-06)
+- The RA-06 builder hit the same `task.md` gap while writing its `--case` + skipped test and sidestepped it (ran without `--task`) and disclosed it. Two builders, two days, one cause. Counted as a sighting since it was found independently; RA-05 fixes it.
+
+### F-35 — Shared constant parked in the downstream module to dodge an import cycle
+- **Date:** 2026-09-21 (RA-06)
+- **Bin:** 2
+- **Claim:** `hunk_request_key` / `CHANGE_REQUEST_KEY` (transport keys) were moved from `pipeline.py` into `compose.py` so `compose` could recognise a skipped key, making `compose` know request naming. The natural owner was `ask.py`, which already owns `RequestItem`. Fixed. Checkable: a name defined in module B, imported only by modules upstream of B in the declared layer order (`state · questions · ask · compose · render`).
+- **Sightings:** 1
+- **Action:** soft. Raised by the boundary reviewer.
+
+### F-36 — A skip path leaves a sibling output half-written
+- **Date:** 2026-09-21 (RA-06)
+- **Bin:** 2
+- **Claim:** `--case` wrote a `keys.json` entry for a request the budget skipped, with no `responses/` file, so `--calibrate` later failed with "no recorded response" and no mention of the budget. Fail-closed, but misleading. Fixed: skipped keys omitted from `keys.json`, named in `meta.json.skipped`. Checkable: a new early-exit or skip in one producer with no test over every other consumer of the same run's data.
+- **Sightings:** 1
+- **Action:** soft. Raised by the boundary reviewer. Same family as F-33.
+
+### H-3 — sighting 9 (2026-09-21, RA-06)
+- Red proof was an ImportError on two new constants; no assertion ran. The tests were real and later caught mutations, but the red commit proved only that the names were missing.
+
+### H-1 — sighting 10 (2026-09-21, RA-06 critic pass and build)
+- Task cited "§4.2 item 3" for a key that lives in §4.3; said a skip was "recorded" without saying how it reached `compose` (the pipeline would have raised `KeyError`); quoted measurements not in `docs/runs.md`; named a fake-recorder seam that did not exist. One human decision (skip plumbing), four nits. The orchestrator's brief then carried a 41-character empty-tree SHA; the builder caught it with `git hash-object -t tree /dev/null`. Build touched `ask.py`, `case.py`, `tests/test_case.py`, `fixtures/README.md` beyond the list, all driven by review findings.
+
+### H-9 — Harness: two parallel tasks edited the same files; the second was rebased onto the first
+- **Date:** 2026-09-21 (RA-05, RA-06)
+- Both were `ready` and independent by `depends_on`, but review widened each into `case.py`, `pipeline.py`, `tests/test_case.py`, `fixtures/README.md`. RA-06 was squashed, rebased onto `RA-05-review-judge` (five conflicts, resolved by its builder), and its PR stacked on #23. `make tasks` cannot see this; the planner's `files` lists are the only early signal and they were wrong (H-1). Note for the orchestrate skill: before dispatching two `ready` tasks in parallel, intersect their `files` lists.
+
 <!--
 ### F-1 — <one-line description>
 - **Date:** YYYY-MM-DD
