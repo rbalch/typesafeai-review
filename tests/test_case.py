@@ -416,7 +416,7 @@ def test_skipped_hunk_is_omitted_from_keys_json_and_named_in_meta_skipped(
         states = real_build_hunk_states(task, change, conventions)
         padded_first: HunkState = {
             **states[0],
-            'hunk': {**states[0]['hunk'], 'diff': states[0]['hunk']['diff'] + ('x' * 40000)},
+            'hunk': {**states[0]['hunk'], 'diff': states[0]['hunk']['diff'] + ('x' * (MAX_REQUEST_TOKENS * 4 * 2))},
         }
         return [padded_first, *states[1:]]
 
