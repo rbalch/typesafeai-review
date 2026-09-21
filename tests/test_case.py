@@ -17,12 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from typesafe_review import calibrate, case
+from typesafe_review import calibrate, case, pipeline
+from typesafe_review.calibrate import run as run_calibrate
 from typesafe_review.cli import main
 from typesafe_review.questions import expected_change_questions, expected_hunk_questions
 from typesafe_review.slicing import slice_diff
-from typesafe_review.state import ChangeState, HunkState
-from typesafe_review.verdict import EXIT_CHANGES_REQUESTED
+from typesafe_review.state import MAX_REQUEST_TOKENS, ChangeState, HunkState
+from typesafe_review.verdict import EXIT_APPROVE, EXIT_CHANGES_REQUESTED, EXIT_NEEDS_HUMAN
 
 _BUILD_REPO_PATH = Path(__file__).parent / 'fixtures' / 'repos' / 'sample' / 'build_repo.py'
 _REPLAY_DIR = Path(__file__).parent / 'fixtures' / 'responses' / 'pipeline_sample'
@@ -88,11 +89,25 @@ def test_case_writes_state_responses_outputs_and_meta(sample, tmp_path: Path) ->
         assert isinstance(info['questions'], list) and info['questions']
         assert isinstance(info['request_key'], str) and len(info['request_key']) == 64
 
-    # responses/ was filled by mirroring the replay hits -- exactly the recorded
-    # fixture's own three files, since the state + questions + model this run sent
-    # are identical to the ones those fixtures were recorded under.
+    # responses/ was filled by mirroring the replay hits -- exactly these three
+    # fixture files, pinned as literals (fix round 1 item 2): both sides of this
+    # assertion must come from ground truth independent of the run's own output,
+    # never from `keys.json`'s own `request_key`s (those are `ask.request_key`'s
+    # output too, so comparing against them can never catch a recorder/key
+    # mismatch -- it would always agree with itself). `_REPLAY_DIR` also carries a
+    # fourth, older `00ecd8ee...` fixture kept only for a `test_pipeline.py` replay
+    # that predates RA-06's diff-based `acceptance_tests`; this run never touches it.
+    _SAMPLE_TASK_RESPONSE_NAMES = {
+        '82a13ea6fa436ed6f43f890ac57cfaab37f819282dc0c621248c1e817ff87366.json',
+        'd19bfe66f212c8aa42908e4b3b5cf9a34c76cd250eec7f7d659af26a09ff97c3.json',
+        'c96e7160f3de90e6608541a7abec5fa9ee320bd1e70b83bee77c7a18257b6cd2.json',
+    }
     responses_dir = case_dir / 'responses'
-    assert sorted(p.name for p in responses_dir.iterdir()) == sorted(p.name for p in _REPLAY_DIR.iterdir())
+    assert {p.name for p in responses_dir.iterdir()} == _SAMPLE_TASK_RESPONSE_NAMES
+    # Cross-check: `keys.json`'s own `request_key`s should agree with the pinned
+    # set too, so a *disagreement* between them (not just a mismatch against reality)
+    # also fails loudly here rather than surfacing as an unrelated-looking miss.
+    assert {f'{info["request_key"]}.json' for info in keys.values()} == _SAMPLE_TASK_RESPONSE_NAMES
 
     # outputs are copies of the run's own ts-review.md / .json.
     worktree_md = (sample.repo / 'ts-review.md').read_text()
@@ -382,3 +397,76 @@ def test_case_with_a_crlf_task_file_round_trips_task_md_byte_for_byte(sample, tm
     )
     assert rc == EXIT_CHANGES_REQUESTED
     assert (case_dir / 'task.md').read_bytes() == crlf_task.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# RA-06 fix round 1 item 5: a request over the token budget is never sent, so
+# `--case` must omit it from `keys.json` (no `request_key`, no `responses/` file)
+# and record it under `meta.json.skipped` instead -- a later `--calibrate` on that
+# case must see a state that was never asked, not one silently missing an answer.
+# ---------------------------------------------------------------------------
+
+
+def test_skipped_hunk_is_omitted_from_keys_json_and_named_in_meta_skipped(
+    sample, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_build_hunk_states = pipeline.build_hunk_states
+
+    def _padded_build_hunk_states(task, change, conventions):
+        states = real_build_hunk_states(task, change, conventions)
+        padded_first: HunkState = {
+            **states[0],
+            'hunk': {**states[0]['hunk'], 'diff': states[0]['hunk']['diff'] + ('x' * 40000)},
+        }
+        return [padded_first, *states[1:]]
+
+    monkeypatch.setattr(pipeline, 'build_hunk_states', _padded_build_hunk_states)
+
+    # RA-05 now writes `<case>/task.md` whenever a task was given, so this no
+    # longer needs the no-task sidestep fix round 1 used here (that round's own
+    # `calibrate.load_case_task` `KeyError` is exactly what RA-05 fixed) -- a
+    # skipped hunk still forces `NEEDS_HUMAN` regardless of task presence
+    # (`compose.py`'s `skipped_present` check), so the verdict assertion below is
+    # unaffected by using `--task` + `_REPLAY_DIR` here now.
+    case_dir = tmp_path / 'cases' / 'padded-hunk'
+    rc = main(
+        [
+            '--worktree',
+            str(sample.repo),
+            '--task',
+            str(sample.task),
+            '--red-sha',
+            sample.red_sha,
+            '--base',
+            sample.base,
+            '--replay',
+            str(_REPLAY_DIR),
+            '--case',
+            str(case_dir),
+        ]
+    )
+    assert rc == EXIT_NEEDS_HUMAN
+
+    keys = json.loads((case_dir / 'state' / 'keys.json').read_text())
+    # Sample has 2 hunks + `<change>` = 3 keys normally; the padded one is gone.
+    assert len(keys) == 2
+    assert case.CHANGE_KEY in keys
+    for info in keys.values():
+        assert 'request_key' in info
+
+    meta = json.loads((case_dir / 'meta.json').read_text())
+    assert len(meta['skipped']) == 1
+    skipped_entry = meta['skipped'][0]
+    assert skipped_entry['key'] == 'hunk-0'
+    assert skipped_entry['budget'] == MAX_REQUEST_TOKENS
+    assert skipped_entry['estimated_tokens'] > MAX_REQUEST_TOKENS
+
+    # No `responses/` entry exists under the skipped key's would-be request_key --
+    # there never was one to mirror.
+    response_names = {p.stem for p in (case_dir / 'responses').iterdir()}
+    request_keys = {info['request_key'] for info in keys.values()}
+    assert response_names == request_keys
+
+    (case_dir / 'labels.json').write_text('{}')
+    calibrate_rc = run_calibrate(case_dir.parent)
+    assert calibrate_rc == EXIT_APPROVE

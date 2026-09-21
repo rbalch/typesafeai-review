@@ -73,6 +73,7 @@
     "nit": 0
   },
   "stop_reason": "needs_human",
+  "skipped": [],
   "engine": {
     "model": "jev-latest",
     "requests": 7,

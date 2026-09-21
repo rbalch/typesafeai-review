@@ -188,9 +188,32 @@ the docs' structured-instructions guidance. Keep state small: one hunk, not the 
   "diff_summary": [ { "path": "...", "added": 30, "removed": 4, "is_test": false } ],
   "src_diff": "<non-test diff, truncated to a size cap>",
   "test_diff": "<test diff since red-sha>",
-  "acceptance_tests": "<the test functions committed at red-sha>"
+  "acceptance_tests": "<diff of the red commit under tests/, added/modified *.py lines only>"
 }
 ```
+
+`acceptance_tests` is `git diff <red-sha>^..<red-sha> -- tests/` (a root commit diffs
+against the empty tree), restricted to added/modified lines of `*.py` files --
+`__init__.py`, fixtures and non-Python data never contribute. Never the whole
+contents of every file under `tests/` as of red-sha: a real repo's full test suite at
+that point can be far bigger than the red commit's own diff, and RA-06 exists because
+that whole-file version once produced a change-wide state of ~49K tokens and a `400
+max_tokens_exceeded` from the API.
+
+### 4.4 Token budget
+
+Every request (one hunk's state + its questions, or the change-wide state + its
+questions) is estimated before it is sent: UTF-8 byte length of the JSON-encoded state
+plus the JSON-encoded questions, divided by 4. `state.py`'s `MAX_REQUEST_TOKENS` is
+this budget (8,000, calibrated 2026-09-18: the largest recorded successful request was
+2,842 input tokens, the known failure was ~49K). A request whose estimate exceeds the
+budget is never sent -- `compose.py` marks every question it would have asked
+`uncertain` with `reason: "state_too_large"`, the verdict is `NEEDS_HUMAN`, and
+`stop_reason` is `"state_too_large"`. `ts-review.json` carries the skipped requests
+under `"skipped": [{"key", "estimated_tokens", "budget"}]`; `ts-review.md` lists them
+under `## Required Checks`. This is independent of `MAX_HUNK_STATE_BYTES` (§4.2 item
+6): a hunk under that hard byte cap can still be over this softer token budget, and is
+skipped rather than sent.
 
 ## 5. Question catalog
 

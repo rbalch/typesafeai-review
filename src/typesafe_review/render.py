@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Any
 
 from typesafe_review.ask import AskResult
-from typesafe_review.compose import UNANSWERED, Finding, Review
+from typesafe_review.compose import STATE_TOO_LARGE, UNANSWERED, Finding, Review, Skipped
 
 #: Output file names, the single source `cli.py` imports -- no second literal.
 OUTPUT_MD = 'ts-review.md'
@@ -103,9 +103,15 @@ def _finding_block(finding: Finding, *, suffix: str = '') -> list[str]:
 def _uncertain_suffix(finding: Finding) -> str:
     if finding.reason == UNANSWERED:
         return ' (unanswered)'
+    if finding.reason == STATE_TOO_LARGE:
+        return ' (state too large)'
     if finding.probability is not None:
         return f' (probability: {finding.probability:.2f})'
     return ''
+
+
+def _skipped_line(skipped: Skipped) -> str:
+    return f'- {skipped.key}: ~{skipped.estimated_tokens} tokens, over the {skipped.budget} token budget'
 
 
 def _table_cell(text: str) -> str:
@@ -136,6 +142,16 @@ def render_markdown(review: Review, task_source: str, red_sha_source: str) -> st
     for check in review.required_checks:
         lines.append(f'| {_table_cell(check.name)} | {_table_cell(check.status)} | {_table_cell(check.notes)} |')
     lines.append('')
+
+    if review.skipped:
+        # RA-06: a request over the token budget was never sent at all -- named
+        # here, under Required Checks, rather than folded into the table above,
+        # since it never ran as a check in the first place.
+        lines.append('Skipped (over the token budget, never sent):')
+        lines.append('')
+        for skipped in review.skipped:
+            lines.append(_skipped_line(skipped))
+        lines.append('')
 
     lines.append('## Findings')
     lines.append('')
@@ -220,6 +236,9 @@ def render_json(
             'uncertain': [_finding_to_dict(f) for f in review.uncertain],
             'counts': dict(review.counts),
             'stop_reason': review.stop_reason,
+            'skipped': [
+                {'key': s.key, 'estimated_tokens': s.estimated_tokens, 'budget': s.budget} for s in review.skipped
+            ],
             'engine': {
                 'model': engine.model,
                 'requests': engine.requests,

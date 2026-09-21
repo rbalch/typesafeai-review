@@ -40,7 +40,7 @@ fixtures/real/<case>/
   responses/                           raw recorded answers, keyed by request_key
   ts-review.md, ts-review.json         copies of the run's own outputs
   task.md                              byte-for-byte copy of a file-sourced --task, if one was given
-  meta.json                            repo, base, head, task_source, model, date, verdict, score
+  meta.json                            repo, base, head, task_source, model, date, verdict, score, skipped
   labels.json                          hand-written ground truth -- RA-05's job, not written here
 ```
 
@@ -49,6 +49,13 @@ absence. A state-kind case never rebuilds a repo or re-slices a diff: `keys.json
 already names every question id each key was eligible for, and the exact
 `request_key` (hashed from the *unredacted* state as sent) to look its answer up
 under `responses/` -- the redacted copy under `state/` is never rehashed.
+
+A hunk or the change over RA-06's token budget was never sent at all: its
+`state/hunk-NN.json`/`change.json` file is still written (for inspection), but it
+has no entry in `keys.json` -- there is no `request_key` to hash and no
+`responses/` file to look one up under. `meta.json`'s own
+`"skipped": [{"key", "estimated_tokens", "budget"}]` names it instead, same shape
+as `ts-review.json`'s.
 
 `fixtures/real/` holds every case recorded this way; `calibrate` walks it exactly
 like the top-level directory (`fixtures/real/*/`, not `fixtures/real/` itself).

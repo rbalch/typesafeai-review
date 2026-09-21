@@ -28,18 +28,31 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
-from typesafe_sdk import JSONContent
+import msgspec
+from typesafe_sdk import Choice, JSONContent, Noul, Score
 from typesafe_sdk import constants as typesafe_constants
 
-from typesafe_review.ask import AskResult, Live, Record, Recorder, Replay, RequestItem, ask_all
+from typesafe_review.ask import (
+    CHANGE_REQUEST_KEY,
+    AskResult,
+    Live,
+    Record,
+    Recorder,
+    Replay,
+    RequestItem,
+    ask_all,
+    hunk_request_key,
+)
 from typesafe_review.case import case_recorder, expected_by_key, write_case
 from typesafe_review.checks import run_checks
 from typesafe_review.compose import Context, compose
@@ -47,6 +60,7 @@ from typesafe_review.questions import expected_change_questions, expected_hunk_q
 from typesafe_review.render import OUTPUT_JSON, OUTPUT_MD, render_json, render_markdown, write_outputs
 from typesafe_review.slicing import MAX_HUNK_LINES, Change, slice_diff
 from typesafe_review.state import (
+    MAX_REQUEST_TOKENS,
     ChangeState,
     HunkState,
     build_change_state,
@@ -62,8 +76,6 @@ _EXIT_BY_VERDICT = {
     Verdict.CHANGES_REQUESTED: EXIT_CHANGES_REQUESTED,
     Verdict.NEEDS_HUMAN: EXIT_NEEDS_HUMAN,
 }
-
-_CHANGE_KEY = 'change'
 
 
 def _log(message: str) -> None:
@@ -128,27 +140,58 @@ def _repo_identity(worktree: Path) -> str:
     return str(worktree)
 
 
-def _hunk_request_key(index: int) -> str:
-    return f'hunk-{index}'
+def _estimate_tokens(state: JSONContent, questions: Mapping[str, Noul | Choice | Score]) -> int:
+    """UTF-8 byte length of `state` plus `questions`, each dumped separately with
+    `json.dumps`'s own default formatting (`msgspec.to_builtins` first, since the
+    SDK's own `Noul`/`Score`/`Choice` question objects aren't `json.dumps`-
+    serialisable directly), divided by 4 -- the same byte-count-then-cap shape
+    `state._check_size` uses, just measuring tokens against `MAX_REQUEST_TOKENS`
+    instead of bytes against `MAX_HUNK_STATE_BYTES` (RA-06).
+
+    This is *not* `ask.request_key`'s canonical form: no `sort_keys`, no compact
+    `(',', ':')` separators, no `model` in the payload, and `state`/`questions` are
+    dumped as two separate documents rather than one combined object. The estimate
+    is conservative rather than exact for two reasons that both push it up, not
+    down: `json.dumps`'s default separators add a space after every `,`/`:` that
+    the compact form omits, and nothing here accounts for the request wrapper
+    (`{"state": ..., "questions": ..., "model": ...}`) shrinking the total via
+    shared structure. A request this estimates just under budget is never smaller
+    than this number of bytes/4 once actually sent.
+    """
+    state_bytes = len(json.dumps(msgspec.to_builtins(state)).encode())
+    questions_bytes = len(json.dumps(msgspec.to_builtins(questions)).encode())
+    return (state_bytes + questions_bytes) // 4
 
 
-def _build_requests(task: Task | None, hunk_states: list[HunkState], change_state: ChangeState) -> list[RequestItem]:
+def _build_requests(
+    task: Task | None, hunk_states: list[HunkState], change_state: ChangeState
+) -> tuple[list[RequestItem], list[tuple[str, int]]]:
     # `cast`: `RequestItem`'s state is `JSONContent`; `HunkState`/`ChangeState` are open
     # `TypedDict`s that serialise to exactly that shape (they round-trip through
     # `json.dumps` already, in `cli.py`'s `--dump-state`), but ty's structural check on
     # an open TypedDict cannot see that on its own.
-    requests: list[RequestItem] = [
-        (
-            _hunk_request_key(i),
+    requests: list[RequestItem] = []
+    skipped: list[tuple[str, int]] = []
+
+    def _maybe_add(key: str, state: JSONContent, questions: Mapping[str, Noul | Choice | Score]) -> None:
+        estimate = _estimate_tokens(state, questions)
+        if estimate > MAX_REQUEST_TOKENS:
+            skipped.append((key, estimate))
+        else:
+            requests.append((key, state, questions))
+
+    for i, hunk_state in enumerate(hunk_states):
+        _maybe_add(
+            hunk_request_key(i),
             cast(JSONContent, dict(hunk_state)),
             send_questions(expected_hunk_questions(hunk_state['file']['language'], hunk_state['file']['is_test'])),
         )
-        for i, hunk_state in enumerate(hunk_states)
-    ]
-    requests.append(
-        (_CHANGE_KEY, cast(JSONContent, dict(change_state)), send_questions(expected_change_questions(task)))
+
+    _maybe_add(
+        CHANGE_REQUEST_KEY, cast(JSONContent, dict(change_state)), send_questions(expected_change_questions(task))
     )
-    return requests
+
+    return requests, skipped
 
 
 def _collect_notes(change: Change, conventions: str) -> list[str]:
@@ -216,7 +259,8 @@ def run(
     change_state = build_change_state(task, change, acceptance_tests)
 
     _log('ask…')
-    requests = _build_requests(task, hunk_states, change_state)
+    requests, skipped = _build_requests(task, hunk_states, change_state)
+    skipped_keys = {key for key, _ in skipped}
     model = resolve_model()
     recorder = resolve_recorder(args)
     if args.case is not None:
@@ -226,12 +270,21 @@ def run(
         recorder = case_recorder(args.case, recorder)
     ask_result: AskResult = asyncio.run(ask_all(requests, model=model, recorder=recorder))
 
-    hunk_answers = [(hunk_states[i], ask_result.answers[_hunk_request_key(i)]) for i in range(len(hunk_states))]
-    change_answers = ask_result.answers[_CHANGE_KEY]
+    # RA-06: a skipped key was never in `requests`, so it was never a key in
+    # `ask_result.answers` either -- `None` stands in for it, and `ask_result.answers`
+    # is never indexed for a skipped key.
+    hunk_answers = [
+        (
+            hunk_states[i],
+            None if hunk_request_key(i) in skipped_keys else ask_result.answers[hunk_request_key(i)],
+        )
+        for i in range(len(hunk_states))
+    ]
+    change_answers = None if CHANGE_REQUEST_KEY in skipped_keys else ask_result.answers[CHANGE_REQUEST_KEY]
 
     _log('compose')
     context = Context(task=task, red_sha=red_sha, src_diff=change.src_diff, test_diff=change.test_diff)
-    review = compose(check_report, hunk_answers, change_answers, context)
+    review = compose(check_report, hunk_answers, change_answers, context, skipped=skipped)
 
     _log('write')
     notes = _collect_notes(change, conventions)
@@ -257,6 +310,6 @@ def run(
             'score': review.score,
         }
         case_expected = expected_by_key(task, hunk_states, change_state)
-        write_case(args.case, hunk_states, change_state, case_expected, json_obj, md, meta, task_text)
+        write_case(args.case, hunk_states, change_state, case_expected, json_obj, md, meta, task_text, skipped=skipped)
 
     return _EXIT_BY_VERDICT[review.verdict]

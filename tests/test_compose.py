@@ -22,18 +22,21 @@ from typesafe_sdk import Choice, NoulAnswer, Score, ScoreAnswer, SystemOneRespon
 
 import typesafe_review.compose as compose_module
 import typesafe_review.questions as questions_module
+from typesafe_review.ask import CHANGE_REQUEST_KEY, hunk_request_key
 from typesafe_review.checks import CheckFinding, CheckReport, CheckResult
 from typesafe_review.compose import (
+    STATE_TOO_LARGE,
     UNANSWERED,
     ComposeInvariantError,
     Context,
     Finding,
     Review,
+    Skipped,
     check_hard_constraints,
     compose,
 )
 from typesafe_review.questions import CATALOG, Question, Scope, Severity, criterion_questions, questions_for
-from typesafe_review.state import HunkState
+from typesafe_review.state import MAX_REQUEST_TOKENS, HunkState
 from typesafe_review.taskfile import Task
 from typesafe_review.verdict import Verdict
 
@@ -209,8 +212,11 @@ def make_hunk(
     exclude: frozenset[str] = frozenset(),
     path: str = 'src/pkg/mod.py',
     header: str = '@@ -10,3 +10,5 @@ def do_thing',
-) -> tuple[HunkState, SystemOneResponse]:
-    """A `(HunkState, Answers)` pair, fully answered except for `overrides`/`exclude`."""
+) -> tuple[HunkState, SystemOneResponse | None]:
+    """A `(HunkState, Answers)` pair, fully answered except for `overrides`/`exclude`.
+    Typed `SystemOneResponse | None` (never actually `None`) purely so a caller's
+    `list[...]` literal mixing this with an RA-06 `(state, None)` skip entry doesn't
+    trip `list`'s invariance in its element type."""
     state = make_hunk_state(path=path, header=header)
     return state, full_hunk_answers(state, overrides, exclude)
 
@@ -248,19 +254,36 @@ def make_check_report(
     return CheckReport(results=results, findings=findings or [])
 
 
+class _Unset:
+    """`run()`'s own "caller didn't pass one" marker for `change_answers` -- RA-06
+    makes `change_answers=None` a meaningful value (the change-wide request was
+    skipped), so plain `None` can no longer double as "use the default
+    fully-answered response"; a distinct sentinel type keeps that unambiguous
+    without a `type: ignore`.
+    """
+
+
+_UNSET = _Unset()
+
+
 def run(
     *,
     check_report: CheckReport | None = None,
-    hunk_answers: list[tuple[HunkState, SystemOneResponse]] | None = None,
-    change_answers: SystemOneResponse | None = None,
+    hunk_answers: list[tuple[HunkState, SystemOneResponse | None]] | None = None,
+    change_answers: SystemOneResponse | _Unset | None = _UNSET,
     context: Context | None = None,
+    skipped: list[tuple[str, int]] | None = None,
 ) -> Review:
     resolved_context = context if context is not None else make_context()
+    resolved_change_answers = (
+        full_change_answers(resolved_context.task) if isinstance(change_answers, _Unset) else change_answers
+    )
     return compose(
         check_report=check_report if check_report is not None else make_check_report(),
         hunk_answers=hunk_answers if hunk_answers is not None else [],
-        change_answers=change_answers if change_answers is not None else full_change_answers(resolved_context.task),
+        change_answers=resolved_change_answers,
         context=resolved_context,
+        skipped=skipped if skipped is not None else [],
     )
 
 
@@ -416,7 +439,7 @@ def test_touches_high_risk_promotes_new_behaviour_untested_to_blocker() -> None:
 def test_dedupe_keeps_higher_probability() -> None:
     hunk_a = make_hunk_state(path='src/pkg/mod.py', header='@@ -1,1 +1,1 @@ def do_thing')
     hunk_b = make_hunk_state(path='src/pkg/mod.py', header='@@ -20,1 +20,1 @@ def do_thing')
-    hunk_answers = [
+    hunk_answers: list[tuple[HunkState, SystemOneResponse | None]] = [
         (hunk_a, full_hunk_answers(hunk_a, overrides={'swallows_exception': noul(0.8)})),
         (hunk_b, full_hunk_answers(hunk_b, overrides={'swallows_exception': noul(0.95)})),
     ]
@@ -431,7 +454,7 @@ def test_dedupe_key_includes_symbol_or_area() -> None:
     """Same id and file, different symbols, do NOT collapse into one finding."""
     hunk_foo = make_hunk_state(path='src/pkg/mod.py', header='@@ -1,1 +1,1 @@ def foo')
     hunk_bar = make_hunk_state(path='src/pkg/mod.py', header='@@ -1,1 +1,1 @@ def bar')
-    hunk_answers = [
+    hunk_answers: list[tuple[HunkState, SystemOneResponse | None]] = [
         (hunk_foo, full_hunk_answers(hunk_foo, overrides={'swallows_exception': noul(0.8)})),
         (hunk_bar, full_hunk_answers(hunk_bar, overrides={'swallows_exception': noul(0.9)})),
     ]
@@ -512,7 +535,7 @@ def test_counts_equal_findings_by_severity() -> None:
 def test_counts_reflect_deduped_findings_not_raw() -> None:
     hunk_a = make_hunk_state(path='src/pkg/mod.py', header='@@ -1,1 +1,1 @@ def do_thing')
     hunk_b = make_hunk_state(path='src/pkg/mod.py', header='@@ -20,1 +20,1 @@ def do_thing')
-    hunk_answers = [
+    hunk_answers: list[tuple[HunkState, SystemOneResponse | None]] = [
         (hunk_a, full_hunk_answers(hunk_a, overrides={'swallows_exception': noul(0.8)})),
         (hunk_b, full_hunk_answers(hunk_b, overrides={'swallows_exception': noul(0.95)})),
     ]
@@ -704,7 +727,7 @@ def test_counts_reflect_deduped_findings_only_once() -> None:
     `counts` directly rather than `findings`, per the fix-round item wording."""
     hunk_a = make_hunk_state(path='src/pkg/mod.py', header='@@ -1,1 +1,1 @@ def do_thing')
     hunk_b = make_hunk_state(path='src/pkg/mod.py', header='@@ -20,1 +20,1 @@ def do_thing')
-    hunk_answers = [
+    hunk_answers: list[tuple[HunkState, SystemOneResponse | None]] = [
         (hunk_a, full_hunk_answers(hunk_a, overrides={'duplicates_helper': noul(0.9)})),
         (hunk_b, full_hunk_answers(hunk_b, overrides={'duplicates_helper': noul(0.95)})),
     ]
@@ -803,3 +826,84 @@ def test_hard_constraint_raises_on_impossible_input(
 
 def test_hard_constraint_does_not_raise_on_consistent_input() -> None:
     check_hard_constraints(Verdict.APPROVE, 4, [], any_check_failed=False)
+
+
+# ---------------------------------------------------------------------------
+# RA-06: a request `pipeline._build_requests` skipped for being over budget never
+# reaches the model; `compose` still owes it an `uncertain` finding per expected
+# question, `reason=STATE_TOO_LARGE`, and the run must land on `NEEDS_HUMAN` /
+# `stop_reason='state_too_large'`.
+# ---------------------------------------------------------------------------
+
+
+def test_hunk_request_key_and_change_request_key_are_pinned() -> None:
+    # Literal pin (ledger F-10): `pipeline.py` builds the exact same strings, and
+    # nothing here derives them from `hunk_request_key`/`CHANGE_REQUEST_KEY`
+    # themselves.
+    assert hunk_request_key(0) == 'hunk-0'
+    assert hunk_request_key(3) == 'hunk-3'
+    assert CHANGE_REQUEST_KEY == 'change'
+
+
+def test_skipped_hunk_findings_are_uncertain_state_too_large_and_needs_human() -> None:
+    hunk_state, _ = make_hunk()
+    # A skipped hunk's request never went out; `pipeline.run` hands compose `None`
+    # for it (never `ask_result.answers[key]`, and never a stand-in response object).
+    review = run(
+        hunk_answers=[(hunk_state, None)],
+        skipped=[(hunk_request_key(0), 12345)],
+    )
+
+    assert review.verdict == Verdict.NEEDS_HUMAN
+    assert review.stop_reason == STATE_TOO_LARGE
+    assert review.skipped == [Skipped(key='hunk-0', estimated_tokens=12345, budget=MAX_REQUEST_TOKENS)]
+    assert review.findings == []
+    assert review.uncertain
+    assert all(f.reason == STATE_TOO_LARGE for f in review.uncertain)
+    expected_ids = {q for q in questions_for('hunk', language='python', is_test=False)}
+    assert {f.question_id for f in review.uncertain} == expected_ids
+
+
+def test_skipped_change_is_uncertain_state_too_large_while_hunk_requests_still_fire() -> None:
+    hunk_a, hunk_a_answers = make_hunk(overrides={'swallows_exception': noul(0.8)})
+
+    review = run(
+        hunk_answers=[(hunk_a, hunk_a_answers)],
+        change_answers=None,
+        skipped=[(CHANGE_REQUEST_KEY, 9999)],
+    )
+
+    assert review.verdict == Verdict.NEEDS_HUMAN
+    assert review.stop_reason == STATE_TOO_LARGE
+    assert review.skipped == [Skipped(key='change', estimated_tokens=9999, budget=MAX_REQUEST_TOKENS)]
+    # The hunk request was never skipped: its own answer still fired normally.
+    fired = [f for f in review.findings if f.question_id == 'swallows_exception']
+    assert len(fired) == 1
+    assert fired[0].reason is None
+    assert any(f.reason == STATE_TOO_LARGE for f in review.uncertain)
+
+
+def test_skipped_and_unskipped_requests_do_not_cross_contaminate_reasons() -> None:
+    """A skipped hunk and a normally-answered hunk in the same run: the skipped
+    one's questions carry `reason=STATE_TOO_LARGE`, the answered one carries no
+    `state_too_large` reason at all, even for its own uncertain/unanswered entries."""
+    skipped_hunk_state, _ = make_hunk(path='src/pkg/skipped.py')
+    answered_hunk_state, answered_hunk_answers = make_hunk(
+        path='src/pkg/answered.py', exclude=frozenset({'success_on_unverified'})
+    )
+
+    review = run(
+        hunk_answers=[
+            (skipped_hunk_state, None),
+            (answered_hunk_state, answered_hunk_answers),
+        ],
+        skipped=[(hunk_request_key(0), 55555)],
+    )
+
+    by_reason = {f.reason for f in review.uncertain}
+    assert STATE_TOO_LARGE in by_reason
+    assert UNANSWERED in by_reason
+    skipped_paths = {f.file for f in review.uncertain if f.reason == STATE_TOO_LARGE}
+    unanswered_paths = {f.file for f in review.uncertain if f.reason == UNANSWERED}
+    assert skipped_paths == {'src/pkg/skipped.py'}
+    assert unanswered_paths == {'src/pkg/answered.py'}
